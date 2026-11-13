@@ -1,0 +1,1065 @@
+# ---
+# last_updated: 2026-11-13
+# status: current
+# description: OpenAPI 3.1 contract for the provider-agnostic WeatherSnapshot document (Necochea).
+# tags: [weather, api, openapi, contract]
+# ---
+openapi: 3.1.0
+
+info:
+  title: Weather Snapshot API
+  version: 1.0.0
+  summary: Read-only, provider-agnostic weather snapshot for Necochea, Argentina.
+  description: |
+    A single JSON document carrying current conditions, a 24-hour forecast and a
+    7-day forecast for one fixed location. The phone never talks to a weather
+    vendor; it reads a snapshot that a producer has already normalised into this
+    shape. Two producers are implemented: the bundled `fixture` and the PC pull
+    (`pc-pull`). On-device scrape (`phone-scrape`) and server push (`push`) exist
+    only as members of the `source.id` vocabulary; nothing implements them.
+
+    **Personal / educational use only.** This contract exists for one private,
+    read-only consumer. No redistribution, no public serving, no premium or
+    paywall bypass. Attribution is mandatory: every document carries
+    `source.attribution` and `source.licenseNote`, and the client displays the
+    attribution in the UI. Producers must respect the upstream vendor's terms of
+    service and rate limits (see `docs/weather/data-sources.md`).
+
+    **Read-only by construction.** The client performs `GET` only, sends no
+    request body, no cookies, no `Authorization` header, no device identifier and
+    no user-identifying query parameter. `If-None-Match` is the only request
+    header with semantics.
+
+    ### Caching and freshness
+    The client's freshness policy is driven by the **document's own** `timing`
+    block. The `1800` / `3600` second defaults are fallbacks used only when a
+    value is absent.
+    - `timing.expiresAt` is checked **first and always wins**: past that instant
+      the document is `expired` no matter how recently it arrived.
+    - Within `timing.ttlSeconds` the document is `fresh` and is not revalidated.
+    - Between `ttlSeconds` and `staleAfterSeconds` the cached document is still
+      rendered and marked for revalidation (stale-while-revalidate).
+    - After `staleAfterSeconds` — and before `expiresAt` — it is `stale`.
+    - Local states are `loading`, `fresh`, `stale`, `expired`, `error`. A cached
+      document is purged once its **local receipt age reaches 7 days**
+      (inclusive), whatever the producer clock says.
+    - `status.ok: false` documents are never cached as last-known-good.
+
+    ### Enforced by the client validator (not expressible in OpenAPI)
+    These invariants span fields; the schema below cannot state them:
+    1. `hourly` has exactly 24 entries, spaced exactly 3600 seconds apart and
+       aligned to the top of the local hour.
+    2. `daily` has exactly 7 entries whose `date` values are consecutive local
+       calendar days.
+    3. `tempMin <= tempMax` for every daily entry.
+    4. `timing.*`, `alerts[].startsAt` and `alerts[].endsAt` are exactly-UTC
+       instants ending in `Z`; `hourly[].time`, `daily[].sunrise` and
+       `daily[].sunset` carry a numeric location offset (`-03:00`).
+    5. `units` equals the fixed map in `WeatherUnits` field for field; any other
+       unit set is rejected rather than converted.
+    6. `status.ok` and nullability agree in both directions: `ok: true` carries
+       `current`, `hourly` and `daily`; `ok: false` carries all three as `null`.
+    7. An `ok: true` document must not carry `status.error`.
+    8. Numeric ranges: humidity, cloud cover and every probability are 0–100,
+       `wind.directionDeg` is 0–360; `ttlSeconds` and `staleAfterSeconds` are
+       integers.
+    9. `snapshotId` matches `^[a-f0-9]{64}$` — the **format only** (see below).
+    10. `schemaVersion` is `MAJOR.MINOR.PATCH`; any `1.x.y` is accepted and an
+        unknown MAJOR is rejected with `UNSUPPORTED_SCHEMA_VERSION`.
+
+    ### Producer-enforced, not client-checked
+    - **`snapshotId` hash equality.** The value must be the lowercase hex SHA-256
+      of `<source.id>|<location.id>|<timing.fetchedAt>`. The client checks the
+      64-hex format only; computing and keeping the hash correct is the
+      producer's responsibility. Because producers are expected to expose the
+      same string as the `ETag`, a wrong hash breaks conditional `GET` but never
+      makes a valid document render incorrectly.
+    - **`daily[0].date` is the location's current local date.** The client checks
+      that the seven dates are consecutive, not that the first one is today.
+
+    ### Conditional GET and error mapping at the transport layer
+    The client sends `If-None-Match: "<snapshotId>"` for the document it already
+    holds and maps the response like this:
+    - `304` — not modified: keep the cached document and refresh its local
+      receipt time.
+    - `404` — unknown location or contract version; surface as `HTTP_ERROR`.
+    - `429` — rate limited; surface as `RATE_LIMITED` and honour `Retry-After`.
+    - Any other non-`200` — surface as `HTTP_ERROR`.
+    - `5xx`, a network failure or a timeout — surface as `UPSTREAM_UNAVAILABLE`,
+      honouring `Retry-After` when present.
+    - A `200` body that is not valid JSON is `PARSE_ERROR`; valid JSON that fails
+      the checks listed under "Enforced by the client validator" is `SCHEMA_INVALID`.
+    - Redirects are refused (`redirect: 'error'`), and a base URL that is not
+      `https://` is rejected before any request is made.
+  license:
+    name: MIT
+    identifier: MIT
+
+servers:
+  - url: https://weather.example.invalid
+    description: |
+      Placeholder for the human's stable host (a named tunnel with a custom
+      domain, never a quick tunnel — see docs/weather/data-sources.md). The
+      `example.invalid` TLD is intentionally unresolvable (RFC 2606) so this
+      file cannot be used to contact a real service by accident.
+
+security: []
+
+tags:
+  - name: snapshot
+    description: The weather snapshot document.
+  - name: ops
+    description: Liveness of the producer.
+
+paths:
+  /weather/necochea/v1/latest.json:
+    get:
+      operationId: getLatestWeatherSnapshot
+      tags: [snapshot]
+      summary: Latest normalised weather snapshot for Necochea
+      description: |
+        Returns the newest complete `WeatherSnapshot` for `necochea-ar`.
+        Stateless and unauthenticated. Supports conditional `GET`: the client
+        sends `If-None-Match: "<snapshotId>"` for the document it already holds
+        and receives `304` when nothing changed. Limitation in this version: the
+        cache is in memory and the only document held at first paint is the
+        bundled fixture, so the shipped app does not actually reach `304` yet —
+        the server behaviour is exercised with `curl` and is ready for the
+        persistence / revalidation follow-ups.
+
+        The producer must not run more often than once every 30 minutes; this
+        repository ships no scheduler, so the command is invoked by hand or by
+        the operator's own cron. In this version the client revalidates on
+        **cold start only**; revalidation on app resume and pull-to-refresh are
+        follow-ups, and there is no polling timer.
+      parameters:
+        - name: If-None-Match
+          in: header
+          required: false
+          description: |
+            The client's current `snapshotId`, wrapped in double quotes (the same
+            string as the `ETag`). When it matches the current document the
+            server answers `304 Not Modified` with no body and the client keeps
+            its cached copy.
+          schema:
+            type: string
+            examples:
+              - '"3850e1166ef8e904120acf491400b7a5bd929632d45c1594c927633e83c161e8"'
+      responses:
+        '200':
+          description: |
+            A complete snapshot. `status.ok` may be `false`; in that case the
+            forecast fields are `null` and the document still validates.
+          headers:
+            ETag:
+              description: |
+                Strong validator, equal to the document's `snapshotId` wrapped in
+                double quotes. Changes whenever the producer emits a new
+                `snapshotId` (that is, a new fetch).
+              schema:
+                type: string
+                pattern: '^"[a-f0-9]{64}"$'
+            Cache-Control:
+              description: |
+                Fixed freshness hint for intermediaries. The client still applies
+                its own `timing.ttlSeconds` / `staleAfterSeconds` logic.
+              schema:
+                type: string
+                const: max-age=300, must-revalidate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WeatherSnapshot'
+              examples:
+                successful:
+                  summary: One valid document (24 hourly and 7 daily entries)
+                  value:
+                    schemaVersion: '1.0.0'
+                    kind: WeatherSnapshot
+                    snapshotId: '3850e1166ef8e904120acf491400b7a5bd929632d45c1594c927633e83c161e8'
+                    source:
+                      id: pc-pull
+                      producer: pc
+                      attribution: 'Datos meteorológicos por Open-Meteo (open-meteo.com) — CC BY 4.0'
+                      url: 'https://open-meteo.com/'
+                      licenseNote: 'Uso personal/educativo/read-only, sin redistribución. Open-Meteo exige atribución (CC BY 4.0) y no admite uso comercial.'
+                    timing:
+                      fetchedAt: '2026-11-12T18:00:00Z'
+                      observedAt: '2026-11-12T17:45:00Z'
+                      issuedAt: '2026-11-12T17:30:00Z'
+                      expiresAt: '2026-11-13T00:00:00Z'
+                      ttlSeconds: 1800
+                      staleAfterSeconds: 3600
+                    location:
+                      id: necochea-ar
+                      name: Necochea
+                      country: AR
+                      lat: -38.5545
+                      lon: -58.7396
+                      timezone: America/Argentina/Buenos_Aires
+                      elevationM: 17
+                    units:
+                      temperature: celsius
+                      windSpeed: kmh
+                      precipitation: mm
+                      precipitationProbability: percent
+                      humidity: percent
+                      pressure: hPa
+                      visibility: km
+                      cloudCover: percent
+                      uvIndex: index
+                    current:
+                      temperature: 19.4
+                      feelsLike: 18.9
+                      condition:
+                        code: partly-cloudy
+                        text: Parcialmente nublado
+                      iconCode: partly-cloudy-day
+                      humidity: 68
+                      wind:
+                        speed: 14
+                        gust: 22
+                        directionDeg: 135
+                        directionCardinal: SE
+                      pressure: 1014
+                      visibility: 12
+                      uvIndex: 4
+                      cloudCover: 45
+                      precipLastHourMm: 0
+                      isDay: true
+                    hourly:
+                      - { time: '2026-11-12T15:00:00-03:00', temperature: 19.4, feelsLike: 18.9, precipProbability: 10, precipMm: 0, windSpeed: 14, windGust: 22, conditionCode: partly-cloudy, iconCode: partly-cloudy-day, isDay: true }
+                      - { time: '2026-11-12T16:00:00-03:00', temperature: 20.1, feelsLike: 19.6, precipProbability: 10, precipMm: 0, windSpeed: 15, windGust: 23, conditionCode: partly-cloudy, iconCode: partly-cloudy-day, isDay: true }
+                      - { time: '2026-11-12T17:00:00-03:00', temperature: 20.6, feelsLike: 20.1, precipProbability: 10, precipMm: 0, windSpeed: 16, windGust: 24, conditionCode: partly-cloudy, iconCode: partly-cloudy-day, isDay: true }
+                      - { time: '2026-11-12T18:00:00-03:00', temperature: 19.8, feelsLike: 19.2, precipProbability: 10, precipMm: 0, windSpeed: 15, windGust: 23, conditionCode: partly-cloudy, iconCode: partly-cloudy-day, isDay: true }
+                      - { time: '2026-11-12T19:00:00-03:00', temperature: 18.2, feelsLike: 17.5, precipProbability: 15, precipMm: 0, windSpeed: 13, windGust: 21, conditionCode: partly-cloudy, iconCode: partly-cloudy-day, isDay: true }
+                      - { time: '2026-11-12T20:00:00-03:00', temperature: 16.9, feelsLike: 16.2, precipProbability: 15, precipMm: 0, windSpeed: 11, windGust: 19, conditionCode: partly-cloudy, iconCode: partly-cloudy-night, isDay: false }
+                      - { time: '2026-11-12T21:00:00-03:00', temperature: 15.8, feelsLike: 15.1, precipProbability: 10, precipMm: 0, windSpeed: 10, windGust: 18, conditionCode: partly-cloudy, iconCode: partly-cloudy-night, isDay: false }
+                      - { time: '2026-11-12T22:00:00-03:00', temperature: 14.9, feelsLike: 14.2, precipProbability: 10, precipMm: 0, windSpeed: 9, windGust: 17, conditionCode: partly-cloudy, iconCode: partly-cloudy-night, isDay: false }
+                      - { time: '2026-11-12T23:00:00-03:00', temperature: 14.1, feelsLike: 13.4, precipProbability: 10, precipMm: 0, windSpeed: 9, windGust: 16, conditionCode: partly-cloudy, iconCode: partly-cloudy-night, isDay: false }
+                      - { time: '2026-11-13T00:00:00-03:00', temperature: 13.4, feelsLike: 12.8, precipProbability: 10, precipMm: 0, windSpeed: 8, windGust: 15, conditionCode: partly-cloudy, iconCode: partly-cloudy-night, isDay: false }
+                      - { time: '2026-11-13T01:00:00-03:00', temperature: 12.9, feelsLike: 12.3, precipProbability: 10, precipMm: 0, windSpeed: 8, windGust: 15, conditionCode: partly-cloudy, iconCode: partly-cloudy-night, isDay: false }
+                      - { time: '2026-11-13T02:00:00-03:00', temperature: 12.4, feelsLike: 11.8, precipProbability: 10, precipMm: 0, windSpeed: 8, windGust: 14, conditionCode: partly-cloudy, iconCode: partly-cloudy-night, isDay: false }
+                      - { time: '2026-11-13T03:00:00-03:00', temperature: 11.9, feelsLike: 11.3, precipProbability: 10, precipMm: 0, windSpeed: 9, windGust: 14, conditionCode: partly-cloudy, iconCode: partly-cloudy-night, isDay: false }
+                      - { time: '2026-11-13T04:00:00-03:00', temperature: 11.5, feelsLike: 10.9, precipProbability: 10, precipMm: 0, windSpeed: 9, windGust: 14, conditionCode: partly-cloudy, iconCode: partly-cloudy-night, isDay: false }
+                      - { time: '2026-11-13T05:00:00-03:00', temperature: 11.2, feelsLike: 10.6, precipProbability: 10, precipMm: 0, windSpeed: 10, windGust: 15, conditionCode: partly-cloudy, iconCode: partly-cloudy-night, isDay: false }
+                      - { time: '2026-11-13T06:00:00-03:00', temperature: 11.6, feelsLike: 11.0, precipProbability: 10, precipMm: 0, windSpeed: 10, windGust: 15, conditionCode: partly-cloudy, iconCode: partly-cloudy-night, isDay: false }
+                      - { time: '2026-11-13T07:00:00-03:00', temperature: 12.4, feelsLike: 11.8, precipProbability: 10, precipMm: 0, windSpeed: 12, windGust: 17, conditionCode: partly-cloudy, iconCode: partly-cloudy-day, isDay: true }
+                      - { time: '2026-11-13T08:00:00-03:00', temperature: 13.8, feelsLike: 13.2, precipProbability: 10, precipMm: 0, windSpeed: 13, windGust: 18, conditionCode: partly-cloudy, iconCode: partly-cloudy-day, isDay: true }
+                      - { time: '2026-11-13T09:00:00-03:00', temperature: 15.2, feelsLike: 14.6, precipProbability: 10, precipMm: 0, windSpeed: 15, windGust: 20, conditionCode: partly-cloudy, iconCode: partly-cloudy-day, isDay: true }
+                      - { time: '2026-11-13T10:00:00-03:00', temperature: 16.7, feelsLike: 16.1, precipProbability: 15, precipMm: 0, windSpeed: 16, windGust: 22, conditionCode: partly-cloudy, iconCode: partly-cloudy-day, isDay: true }
+                      - { time: '2026-11-13T11:00:00-03:00', temperature: 18.0, feelsLike: 17.3, precipProbability: 15, precipMm: 0, windSpeed: 17, windGust: 23, conditionCode: partly-cloudy, iconCode: partly-cloudy-day, isDay: true }
+                      - { time: '2026-11-13T12:00:00-03:00', temperature: 19.1, feelsLike: 18.4, precipProbability: 20, precipMm: 0.1, windSpeed: 16, windGust: 22, conditionCode: partly-cloudy, iconCode: partly-cloudy-day, isDay: true }
+                      - { time: '2026-11-13T13:00:00-03:00', temperature: 20.0, feelsLike: 19.3, precipProbability: 20, precipMm: 0.1, windSpeed: 15, windGust: 21, conditionCode: partly-cloudy, iconCode: partly-cloudy-day, isDay: true }
+                      - { time: '2026-11-13T14:00:00-03:00', temperature: 20.4, feelsLike: 19.7, precipProbability: 20, precipMm: 0.1, windSpeed: 14, windGust: 20, conditionCode: partly-cloudy, iconCode: partly-cloudy-day, isDay: true }
+                    daily:
+                      - { date: '2026-11-12', tempMin: 11, tempMax: 21, precipProbability: 10, precipMm: 0, sunrise: '2026-11-12T05:45:00-03:00', sunset: '2026-11-12T19:45:00-03:00', conditionCode: partly-cloudy, iconCode: partly-cloudy-day, uvIndexMax: 5, windSpeedMax: 17 }
+                      - { date: '2026-11-13', tempMin: 12, tempMax: 22, precipProbability: 20, precipMm: 0.2, sunrise: '2026-11-13T05:44:00-03:00', sunset: '2026-11-13T19:46:00-03:00', conditionCode: partly-cloudy, iconCode: partly-cloudy-day, uvIndexMax: 6, windSpeedMax: 18 }
+                      - { date: '2026-11-14', tempMin: 13, tempMax: 24, precipProbability: 30, precipMm: 1.1, sunrise: '2026-11-14T05:43:00-03:00', sunset: '2026-11-14T19:47:00-03:00', conditionCode: rain, iconCode: rain, uvIndexMax: 4, windSpeedMax: 21 }
+                      - { date: '2026-11-15', tempMin: 14, tempMax: 23, precipProbability: 25, precipMm: 0.6, sunrise: '2026-11-15T05:42:00-03:00', sunset: '2026-11-15T19:48:00-03:00', conditionCode: partly-cloudy, iconCode: partly-cloudy-day, uvIndexMax: 6, windSpeedMax: 19 }
+                      - { date: '2026-11-16', tempMin: 12, tempMax: 20, precipProbability: 40, precipMm: 2.4, sunrise: '2026-11-16T05:41:00-03:00', sunset: '2026-11-16T19:49:00-03:00', conditionCode: rain, iconCode: rain, uvIndexMax: 4, windSpeedMax: 23 }
+                      - { date: '2026-11-17', tempMin: 10, tempMax: 19, precipProbability: 20, precipMm: 0.3, sunrise: '2026-11-17T05:40:00-03:00', sunset: '2026-11-17T19:50:00-03:00', conditionCode: cloudy, iconCode: cloudy, uvIndexMax: 5, windSpeedMax: 16 }
+                      - { date: '2026-11-18', tempMin: 11, tempMax: 21, precipProbability: 15, precipMm: 0, sunrise: '2026-11-18T05:39:00-03:00', sunset: '2026-11-18T19:51:00-03:00', conditionCode: clear, iconCode: clear-day, uvIndexMax: 6, windSpeedMax: 15 }
+                    status:
+                      ok: true
+        '304':
+          description: |
+            Not modified. The client sent `If-None-Match: "<snapshotId>"` with its
+            cached document, the value matched, so the caller keeps that cached
+            document and refreshes its local receipt time. No body is returned
+            and no re-render is needed.
+          headers:
+            ETag:
+              description: The unchanged strong validator.
+              schema:
+                type: string
+                pattern: '^"[a-f0-9]{64}"$'
+            Cache-Control:
+              description: Same fixed freshness hint as the 200 response.
+              schema:
+                type: string
+                const: max-age=300, must-revalidate
+        '404':
+          description: |
+            Unknown location or contract version. No document is returned. The
+            client surfaces `HTTP_ERROR`.
+        '429':
+          description: |
+            Rate limited. No snapshot body is required; the client surfaces this
+            as `RATE_LIMITED` locally, keeps any cached document, and waits at
+            least `Retry-After` seconds before its next attempt.
+          headers:
+            Retry-After:
+              description: Seconds the client must wait before retrying.
+              schema:
+                type: integer
+                minimum: 0
+        '5XX':
+          description: |
+            Producer or upstream unavailable. The client maps this to
+            `UPSTREAM_UNAVAILABLE` locally. If `Retry-After` is present it is
+            honoured; otherwise the next attempt waits for the next normal
+            revalidation point.
+          headers:
+            Retry-After:
+              description: Optional seconds to wait before retrying.
+              schema:
+                type: integer
+                minimum: 0
+
+  /healthz:
+    get:
+      operationId: getHealth
+      tags: [ops]
+      summary: Producer liveness
+      description: |
+        Optional liveness probe for the producer. It returns no weather data and
+        is never required by the client.
+      responses:
+        '200':
+          description: Producer is up.
+          content:
+            text/plain:
+              schema:
+                type: string
+                const: ok
+        '503':
+          description: Producer is up but cannot serve a recent snapshot.
+
+components:
+  schemas:
+
+    WeatherSnapshot:
+      type: object
+      description: |
+        The whole document. One location, one producer, one fetch instant.
+        `current`, `hourly` and `daily` are non-null only when `status.ok` is
+        `true`.
+      additionalProperties: false
+      required:
+        - schemaVersion
+        - kind
+        - snapshotId
+        - source
+        - timing
+        - location
+        - units
+        - current
+        - hourly
+        - daily
+        - status
+      properties:
+        schemaVersion:
+          type: string
+          const: '1.0.0'
+          description: |
+            Contract version as `MAJOR.MINOR.PATCH`. This document defines
+            `1.0.0`. A consumer accepts any `1.x.y` and rejects another MAJOR.
+        kind:
+          type: string
+          const: WeatherSnapshot
+          description: Discriminator for the document type. Always `WeatherSnapshot`.
+        snapshotId:
+          type: string
+          pattern: '^[a-f0-9]{64}$'
+          description: |
+            Lowercase hex SHA-256 of `<source.id>|<location.id>|<timing.fetchedAt>`,
+            equal to the unquoted HTTP `ETag`. The client validates the 64-hex
+            format only; hash equality is the producer's responsibility.
+        source:
+          $ref: '#/components/schemas/SnapshotSource'
+        timing:
+          $ref: '#/components/schemas/SnapshotTiming'
+        location:
+          $ref: '#/components/schemas/SnapshotLocation'
+        units:
+          $ref: '#/components/schemas/WeatherUnits'
+        current:
+          description: |
+            Current conditions, or `null` when `status.ok` is `false`.
+          anyOf:
+            - $ref: '#/components/schemas/CurrentConditions'
+            - type: 'null'
+        hourly:
+          description: |
+            Exactly 24 hourly entries, or `null` when `status.ok` is `false`.
+            The client enforces the count (24) and the 3600-second spacing; that
+            the first entry is the current local hour is producer-enforced.
+          anyOf:
+            - type: array
+              minItems: 24
+              maxItems: 24
+              items:
+                $ref: '#/components/schemas/HourlyEntry'
+            - type: 'null'
+        daily:
+          description: |
+            Exactly 7 daily entries on consecutive local calendar days, or `null`
+            when `status.ok` is `false`. The client enforces the count (7) and
+            consecutiveness; that `daily[0].date` is the current local date is
+            producer-enforced.
+          anyOf:
+            - type: array
+              minItems: 7
+              maxItems: 7
+              items:
+                $ref: '#/components/schemas/DailyEntry'
+            - type: 'null'
+        alerts:
+          description: |
+            Optional active alerts for the location. Omitted or empty when there
+            are none. Not part of the 24/7 forecast counts.
+          type: array
+          items:
+            $ref: '#/components/schemas/WeatherAlert'
+        status:
+          $ref: '#/components/schemas/SnapshotStatus'
+      allOf:
+        - if:
+            required: [status]
+            properties:
+              status:
+                required: [ok]
+                properties:
+                  ok:
+                    const: true
+          then:
+            description: A successful document carries all three forecast blocks.
+            properties:
+              current:
+                $ref: '#/components/schemas/CurrentConditions'
+              hourly:
+                type: array
+                minItems: 24
+                maxItems: 24
+                items:
+                  $ref: '#/components/schemas/HourlyEntry'
+              daily:
+                type: array
+                minItems: 7
+                maxItems: 7
+                items:
+                  $ref: '#/components/schemas/DailyEntry'
+          else:
+            description: A failed document carries no forecast data at all.
+            properties:
+              current:
+                type: 'null'
+              hourly:
+                type: 'null'
+              daily:
+                type: 'null'
+
+    SnapshotSource:
+      type: object
+      description: |
+        Provenance of the document: which producer made it, from where, and under
+        which attribution. The client displays `attribution`; it never guesses a
+        vendor name.
+      additionalProperties: false
+      required: [id, producer, attribution, url, licenseNote]
+      properties:
+        id:
+          type: string
+          enum: [fixture, pc-pull, phone-scrape, push]
+          description: |
+            Producer strategy identifier. `fixture` is bundled synthetic data,
+            `pc-pull` is a PC fetching and normalising upstream data,
+            `phone-scrape` is an on-device scrape (not implemented, blocked by
+            an upstream 403), `push` is a future server-initiated feed.
+        producer:
+          type: string
+          enum: [fixture, pc, phone]
+          description: |
+            Where the normalisation ran. `fixture` for bundled data, `pc` for a
+            home computer, `phone` for the device itself.
+        attribution:
+          type: string
+          description: |
+            Human-readable credit line naming the upstream data provider. Shown
+            in the UI on every screen that renders weather values.
+        url:
+          type: [string, 'null']
+          format: uri
+          description: |
+            Canonical upstream page or feed the values were derived from, or
+            `null` for a bundled fixture. Informational only; the phone does not
+            fetch it.
+        licenseNote:
+          type: string
+          description: |
+            Short statement of the permitted use (personal, educational,
+            read-only, no redistribution) and any upstream terms that apply.
+
+    SnapshotTiming:
+      type: object
+      description: |
+        Time bookkeeping for the document. All four instants are UTC and end in
+        `Z`; the local timezone lives in `location.timezone`.
+      additionalProperties: false
+      required:
+        - fetchedAt
+        - observedAt
+        - issuedAt
+        - expiresAt
+        - ttlSeconds
+        - staleAfterSeconds
+      properties:
+        fetchedAt:
+          type: string
+          format: date-time
+          pattern: 'Z$'
+          description: |
+            Instant the producer fetched or generated the upstream data. Part of
+            the `snapshotId` input, so it identifies the fetch.
+        observedAt:
+          type: string
+          format: date-time
+          pattern: 'Z$'
+          description: |
+            Instant the upstream observation describes. Usually slightly earlier
+            than `fetchedAt`.
+        issuedAt:
+          type: string
+          format: date-time
+          pattern: 'Z$'
+          description: |
+            Instant the upstream provider issued its forecast run.
+        expiresAt:
+          type: string
+          format: date-time
+          pattern: 'Z$'
+          description: |
+            Instant after which the document is `expired` regardless of local
+            cache age. The client checks this instant first: it wins over
+            `ttlSeconds` and `staleAfterSeconds`. Defaults to `fetchedAt + 6h`.
+        ttlSeconds:
+          type: integer
+          minimum: 60
+          default: 1800
+          description: |
+            Seconds the document stays `fresh` without revalidation. The
+            document's own value drives the client; `1800` is only the fallback.
+        staleAfterSeconds:
+          type: integer
+          minimum: 60
+          default: 3600
+          description: |
+            Seconds after which the document is `stale`. Between `ttlSeconds` and
+            this value the cached document is still rendered and marked for
+            revalidation (stale-while-revalidate). The document's own value
+            drives the client; `3600` is only the fallback.
+
+    SnapshotLocation:
+      type: object
+      description: |
+        The single fixed location this contract serves. Multi-location support is
+        deliberately out of scope for v1.
+      additionalProperties: false
+      required: [id, name, country, lat, lon, timezone]
+      properties:
+        id:
+          type: string
+          description: Stable slug used in the URL path and in `snapshotId`.
+          examples: [necochea-ar]
+        name:
+          type: string
+          description: Display name of the city.
+          examples: [Necochea]
+        country:
+          type: string
+          pattern: '^[A-Z]{2}$'
+          description: ISO 3166-1 alpha-2 country code.
+          examples: [AR]
+        lat:
+          type: number
+          minimum: -90
+          maximum: 90
+          description: Latitude in decimal degrees, WGS 84.
+          examples: [-38.5545]
+        lon:
+          type: number
+          minimum: -180
+          maximum: 180
+          description: Longitude in decimal degrees, WGS 84.
+          examples: [-58.7396]
+        timezone:
+          type: string
+          description: |
+            IANA timezone identifier. It defines the local hour used by
+            `hourly[].time` offsets and the local calendar day used by
+            `daily[].date`.
+          examples: [America/Argentina/Buenos_Aires]
+        elevationM:
+          type: integer
+          description: |
+            Optional elevation above sea level in metres. Used only for display
+            and pressure context; never for a network lookup.
+          examples: [17]
+
+    WeatherUnits:
+      type: object
+      description: |
+        The one accepted unit set. Every field is a fixed literal: the client
+        compares the whole object for equality and rejects anything else with
+        `UNSUPPORTED_UNITS` rather than converting silently.
+      additionalProperties: false
+      required:
+        - temperature
+        - windSpeed
+        - precipitation
+        - precipitationProbability
+        - humidity
+        - pressure
+        - visibility
+        - cloudCover
+        - uvIndex
+      properties:
+        temperature:
+          type: string
+          const: celsius
+          description: Temperature in degrees Celsius.
+        windSpeed:
+          type: string
+          const: kmh
+          description: Wind and gust speed in kilometres per hour.
+        precipitation:
+          type: string
+          const: mm
+          description: Liquid-equivalent precipitation in millimetres.
+        precipitationProbability:
+          type: string
+          const: percent
+          description: Probability of precipitation as a percentage (0-100).
+        humidity:
+          type: string
+          const: percent
+          description: Relative humidity as a percentage (0-100).
+        pressure:
+          type: string
+          const: hPa
+          description: Mean sea-level pressure in hectopascals.
+        visibility:
+          type: string
+          const: km
+          description: Visibility distance in kilometres.
+        cloudCover:
+          type: string
+          const: percent
+          description: Total cloud cover as a percentage (0-100).
+        uvIndex:
+          type: string
+          const: index
+          description: UV index as a unitless index value.
+
+    CurrentConditions:
+      type: object
+      description: |
+        Conditions at `timing.observedAt`. Nullable members are present but
+        `null` when the upstream source does not publish them; they are never
+        omitted.
+      additionalProperties: false
+      required:
+        - temperature
+        - feelsLike
+        - condition
+        - iconCode
+        - humidity
+        - wind
+        - pressure
+        - visibility
+        - uvIndex
+        - cloudCover
+        - precipLastHourMm
+        - isDay
+      properties:
+        temperature:
+          type: number
+          description: Air temperature in degrees Celsius.
+        feelsLike:
+          type: number
+          description: Apparent temperature in degrees Celsius.
+        condition:
+          $ref: '#/components/schemas/SnapshotCondition'
+        iconCode:
+          $ref: '#/components/schemas/IconCode'
+        humidity:
+          type: number
+          minimum: 0
+          maximum: 100
+          description: Relative humidity as a percentage.
+        wind:
+          $ref: '#/components/schemas/SnapshotWind'
+        pressure:
+          type: [number, 'null']
+          description: Mean sea-level pressure in hPa, or `null` if unavailable.
+        visibility:
+          type: [number, 'null']
+          minimum: 0
+          description: Visibility in kilometres, or `null` if unavailable.
+        uvIndex:
+          type: [number, 'null']
+          minimum: 0
+          description: UV index, or `null` if unavailable.
+        cloudCover:
+          type: [number, 'null']
+          minimum: 0
+          maximum: 100
+          description: Total cloud cover as a percentage, or `null`.
+        precipLastHourMm:
+          type: [number, 'null']
+          minimum: 0
+          description: |
+            Liquid-equivalent precipitation in the last hour, in millimetres, or
+            `null` when the source reports no accumulation.
+        isDay:
+          type: boolean
+          description: |
+            Whether the location is in daylight at `timing.observedAt`. Drives
+            day/night icon selection, not a separate sun-position query.
+
+    SnapshotCondition:
+      type: object
+      description: |
+        A normalised weather condition: a machine code for logic and a short
+        human text for display.
+      additionalProperties: false
+      required: [code, text]
+      properties:
+        code:
+          $ref: '#/components/schemas/ConditionCode'
+        text:
+          type: string
+          description: |
+            Short human-readable description in the producer's chosen language.
+            Displayed as-is; the client does not translate it.
+          examples: [Parcialmente nublado]
+
+    SnapshotWind:
+      type: object
+      description: |
+        Wind at the observation instant. `speed` is always known; the other
+        members may be `null` when the upstream source omits them.
+      additionalProperties: false
+      required: [speed, gust, directionDeg, directionCardinal]
+      properties:
+        speed:
+          type: number
+          minimum: 0
+          description: Sustained wind speed in km/h.
+        gust:
+          type: [number, 'null']
+          minimum: 0
+          description: Peak gust in km/h, or `null` when not reported.
+        directionDeg:
+          type: [number, 'null']
+          minimum: 0
+          maximum: 360
+          description: |
+            Direction the wind blows from, in meteorological degrees clockwise
+            from north (0 = north, 90 = east), or `null`.
+        directionCardinal:
+          type: [string, 'null']
+          pattern: '^[NSEW]{1,3}$'
+          description: |
+            Cardinal or intercardinal form of `directionDeg` (N, NNE, NE, …,
+            NNW), or `null`.
+
+    HourlyEntry:
+      type: object
+      description: |
+        One hour of the forecast. Exactly 24 consecutive entries are required,
+        spaced 3600 seconds apart and aligned to the local hour.
+      additionalProperties: false
+      required:
+        - time
+        - temperature
+        - feelsLike
+        - precipProbability
+        - precipMm
+        - windSpeed
+        - windGust
+        - conditionCode
+        - iconCode
+        - isDay
+      properties:
+        time:
+          type: string
+          format: date-time
+          description: |
+            Start of the hour as an ISO-8601 instant carrying the location offset
+            (`-03:00` for Necochea), not `Z`.
+          examples: ['2026-11-12T15:00:00-03:00']
+        temperature:
+          type: number
+          description: Air temperature in degrees Celsius.
+        feelsLike:
+          type: number
+          description: Apparent temperature in degrees Celsius.
+        precipProbability:
+          type: number
+          minimum: 0
+          maximum: 100
+          description: Probability of precipitation for the hour, as a percentage.
+        precipMm:
+          type: number
+          minimum: 0
+          description: Expected liquid-equivalent precipitation for the hour, in mm.
+        windSpeed:
+          type: number
+          minimum: 0
+          description: Sustained wind speed in km/h.
+        windGust:
+          type: [number, 'null']
+          minimum: 0
+          description: Peak gust in km/h, or `null` when not reported.
+        conditionCode:
+          $ref: '#/components/schemas/ConditionCode'
+        iconCode:
+          $ref: '#/components/schemas/IconCode'
+        isDay:
+          type: boolean
+          description: Whether this hour falls in daylight at the location.
+
+    DailyEntry:
+      type: object
+      description: |
+        One local calendar day. Exactly 7 consecutive days are required, starting
+        at the location's current local date.
+      additionalProperties: false
+      required:
+        - date
+        - tempMin
+        - tempMax
+        - precipProbability
+        - precipMm
+        - sunrise
+        - sunset
+        - conditionCode
+        - iconCode
+        - uvIndexMax
+        - windSpeedMax
+      properties:
+        date:
+          type: string
+          format: date
+          description: Local calendar date in `YYYY-MM-DD` form.
+          examples: ['2026-11-12']
+        tempMin:
+          type: number
+          description: Forecast minimum air temperature in degrees Celsius.
+        tempMax:
+          type: number
+          description: |
+            Forecast maximum air temperature in degrees Celsius. Must be greater
+            than or equal to `tempMin` (checked at runtime).
+        precipProbability:
+          type: number
+          minimum: 0
+          maximum: 100
+          description: Probability of precipitation for the day, as a percentage.
+        precipMm:
+          type: number
+          minimum: 0
+          description: Expected liquid-equivalent precipitation for the day, in mm.
+        sunrise:
+          type: [string, 'null']
+          format: date-time
+          description: |
+            Local sunrise instant with the location offset, or `null` when the
+            source does not publish it.
+        sunset:
+          type: [string, 'null']
+          format: date-time
+          description: |
+            Local sunset instant with the location offset, or `null` when the
+            source does not publish it.
+        conditionCode:
+          $ref: '#/components/schemas/ConditionCode'
+        iconCode:
+          $ref: '#/components/schemas/IconCode'
+        uvIndexMax:
+          type: [number, 'null']
+          minimum: 0
+          description: Peak UV index for the day, or `null` when unavailable.
+        windSpeedMax:
+          type: number
+          minimum: 0
+          description: Maximum sustained wind speed for the day, in km/h.
+
+    WeatherAlert:
+      type: object
+      description: |
+        One active advisory or warning for the location. Alerts are optional and
+        do not affect the 24/7 counts.
+      additionalProperties: false
+      required: [id, title, severity, startsAt, endsAt, text]
+      properties:
+        id:
+          type: string
+          description: Stable identifier for the alert, unique within a document.
+        title:
+          type: string
+          description: Short headline shown in the alert list.
+        severity:
+          type: string
+          enum: [minor, moderate, severe, extreme, unknown]
+          description: |
+            Normalised severity. `unknown` is used when the upstream wording does
+            not map onto the other four levels.
+        startsAt:
+          type: string
+          format: date-time
+          description: Start instant of the alert, UTC with `Z`.
+        endsAt:
+          type: [string, 'null']
+          format: date-time
+          description: End instant of the alert, UTC with `Z`, or `null` if open-ended.
+        text:
+          type: string
+          description: Full advisory text as issued by the upstream provider.
+
+    SnapshotStatus:
+      type: object
+      description: |
+        Success discriminator. `ok: true` means the forecast blocks are present;
+        `ok: false` means they are `null` and `error` explains why. A failed
+        document is never cached as last-known-good.
+      additionalProperties: false
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+          description: Whether this document carries usable weather data.
+        error:
+          $ref: '#/components/schemas/SnapshotError'
+      allOf:
+        - if:
+            required: [ok]
+            properties:
+              ok:
+                const: true
+          then:
+            not:
+              required: [error]
+        - if:
+            required: [ok]
+            properties:
+              ok:
+                const: false
+          then:
+            required: [error]
+
+    SnapshotError:
+      type: object
+      description: |
+        Structured failure. The code is the contract; the message is for humans
+        and logs and must not be parsed.
+      additionalProperties: false
+      required: [code, message, retryAfterSeconds]
+      properties:
+        code:
+          type: string
+          enum:
+            - FETCH_BLOCKED
+            - HTTP_ERROR
+            - PARSE_ERROR
+            - SCHEMA_INVALID
+            - RATE_LIMITED
+            - UPSTREAM_UNAVAILABLE
+            - CLOCK_SKEW
+            - UNSUPPORTED_SCHEMA_VERSION
+            - UNSUPPORTED_UNITS
+          description: |
+            Machine-readable cause. `FETCH_BLOCKED` is an anti-bot / access
+            denial (HTTP 403 class), `HTTP_ERROR` any other non-2xx,
+            `PARSE_ERROR` a body that is not JSON, `SCHEMA_INVALID` a JSON body
+            that fails the client-validator checks, `RATE_LIMITED` an HTTP 429,
+            `UPSTREAM_UNAVAILABLE` a 5xx or transport failure, `CLOCK_SKEW` a
+            **producer-side** diagnosis (the client never emits it),
+            `UNSUPPORTED_SCHEMA_VERSION` an unknown MAJOR, `UNSUPPORTED_UNITS` a
+            non-literal unit set.
+        message:
+          type: string
+          description: Human-readable explanation for logs and diagnostics.
+        retryAfterSeconds:
+          type: [integer, 'null']
+          minimum: 0
+          description: |
+            Seconds to wait before retrying, taken from `Retry-After` when
+            present, otherwise `null`.
+
+    ConditionCode:
+      type: string
+      description: |
+        Normalised condition taxonomy shared by current, hourly and daily data.
+        Producers map vendor-specific wording onto these values; `unknown` is the
+        fallback rather than an invented code.
+
+        The shipped producer (`apps/weather-radar/scripts/weather-normalize.mjs`)
+        normalises Open-Meteo's numeric **WMO `weather_code`**; the table is the
+        mapping of record:
+
+        | WMO code(s) | ConditionCode | IconCode |
+        | --- | --- | --- |
+        | 0, 1 | `clear` | `clear-day` / `clear-night` (from `is_day`) |
+        | 2 | `partly-cloudy` | `partly-cloudy-day` / `partly-cloudy-night` |
+        | 3 | `overcast` | `overcast` |
+        | 45, 48 | `fog` | `fog` |
+        | 51, 53, 55 | `drizzle` | `drizzle` |
+        | 56, 57 | `sleet` | `sleet` |
+        | 61, 63 | `rain` | `rain` |
+        | 65 | `heavy-rain` | `heavy-rain` |
+        | 66, 67 | `sleet` | `sleet` |
+        | 71, 73, 75, 77 | `snow` | `snow` |
+        | 80, 81 | `rain` | `rain` |
+        | 82 | `heavy-rain` | `heavy-rain` |
+        | 85, 86 | `snow` | `snow` |
+        | 95, 96, 99 | `thunderstorm` | `thunderstorm` |
+        | anything else | `unknown` | `unknown` |
+
+        The es-AR display text is derived from the same code. Day/night variants
+        exist only for `clear` and `partly-cloudy`; every other family uses one
+        shared icon, and daily entries use the day variant. `wind` has no WMO
+        code today, so the shipped table never emits it.
+
+        The mapping belongs to the producer: the app consumes `ConditionCode`
+        values and never parses vendor text. A future AccuWeather producer must
+        document its own table here before it is enabled.
+      enum:
+        - clear
+        - partly-cloudy
+        - cloudy
+        - overcast
+        - fog
+        - drizzle
+        - rain
+        - heavy-rain
+        - thunderstorm
+        - sleet
+        - snow
+        - wind
+        - unknown
+
+    IconCode:
+      type: string
+      description: |
+        Icon selector. Day/night variants exist for clear and partly cloudy; the
+        other codes are shared. The client maps each code to a local glyph and
+        never downloads an icon.
+      enum:
+        - clear-day
+        - clear-night
+        - partly-cloudy-day
+        - partly-cloudy-night
+        - cloudy
+        - overcast
+        - fog
+        - drizzle
+        - rain
+        - heavy-rain
+        - thunderstorm
+        - sleet
+        - snow
+        - wind
+        - unknown
