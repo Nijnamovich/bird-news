@@ -16,6 +16,7 @@ related:
 - weather-data-sources
 - weather-endpoints
 - weather-radar-debt
+- release-and-update-runbook
 moved_from:
 - docs/weather/pc-pull-runbook.md
 version: 1.0
@@ -26,20 +27,21 @@ status: active
 
 ## Problem
 
-The app ships offline: both base-URL constants are empty, so it renders the bundled fixture and
-opens no socket. Showing **real** Necochea data without creating a tunnel requires a repeatable
-sequence — produce one validated snapshot, serve it with a faithful `ETag`, point the phone at it
-over `adb reverse` — and the sequence must be documented well enough that a failed step is
-diagnosable rather than guessed at.
+The app's shipped configuration reads its snapshot from **GitHub Pages**
+([ADR-0004](../adrs/adr-0004-github-pages-for-snapshots.md)), so running the producer locally is a
+development and verification path. Exercising it end to end requires a repeatable sequence —
+produce one validated snapshot, serve it with a faithful `ETag`, point the phone at it over
+`adb reverse` — and the sequence must be documented well enough that a failed step is diagnosable
+rather than guessed at.
 
 Scope: `apps/weather-radar/` and this procedure. All app commands run from
 **`apps/weather-radar/`**, never the repository root.
 
 ## Solution
 
-This procedure does **not** create a tunnel or public hostname (see step 6), push data to the
-phone (`push` is out of scope), use anything but `GET` (no body, cookies, `Authorization`, device
-identifier or user-data query parameter), run faster than one producer fetch per 30 minutes
+This procedure does **not** publish to GitHub Pages (the scheduled workflow does that), push data
+to the phone (`push` is out of scope), use anything but `GET` (no body, cookies, `Authorization`,
+device identifier or user-data query parameter), run faster than one producer fetch per 30 minutes
 (48/day ceiling), or scrape HTML / invent values — the AccuWeather adapter is present but
 **disabled**.
 
@@ -121,12 +123,14 @@ adb reverse tcp:8080 tcp:8080
 Then edit `src/app/app.ts`:
 
 ```ts
-const PULL_BASE_URL = '';                           // production stays empty
+const PULL_BASE_URL = '';                           // emptied for the local loop
 const DEV_HTTP_BASE_URL = 'http://localhost:8080';  // DEV ONLY
 ```
 
-A physical phone on the same Wi-Fi can use `http://<LAN-IP>:8080` instead (the serve command
-prints the LAN URL). Start the app with `npm run android`.
+`PULL_BASE_URL` is committed as the GitHub Pages origin. Setting both constants throws at startup,
+so empty it for the local loop and restore it when done. A physical phone on the same Wi-Fi can use
+`http://<LAN-IP>:8080` instead (the serve command prints the LAN URL). Start the app with
+`npm run android`.
 
 Confirm on device: the banner flips from `Datos de ejemplo · sin conexión` to a live freshness
 label (e.g. `Actualizado hace …`) and the temperature matches the produced document. Read the tree
@@ -158,11 +162,13 @@ Measured 2026-11-13: Expo Go on the `pixel` AVD (API 36) pulled `http://localhos
 only; a LAN-IP `http://` pull is not verified and is the case most likely to hit the policy
 above.
 
-### 6. Later: the tunnel (named, never quick)
+### 6. Optional DEV remote access: the tunnel (named, never quick)
 
-A quick tunnel (`trycloudflare.com`) is rejected: its hostname rotates on every restart, so the
-saved `PULL_BASE_URL` breaks and the app silently falls back to the fixture. Use a named tunnel
-with a custom domain.
+Production no longer uses a tunnel: GitHub Pages serves the snapshot over HTTPS
+([ADR-0004](../adrs/adr-0004-github-pages-for-snapshots.md)). This section is only for reaching a
+**local** server from a phone that is off the LAN. A quick tunnel (`trycloudflare.com`) is rejected:
+its hostname rotates on every restart, so a saved `DEV_HTTP_BASE_URL` breaks and the app silently
+falls back to the fixture. Use a named tunnel with a custom domain.
 
 ```sh
 cloudflared tunnel login
@@ -185,15 +191,15 @@ ingress:
 cloudflared tunnel run weather-necochea
 ```
 
-Then the one-constant upgrade: keep `npm run weather:serve` running and set
-`PULL_BASE_URL = 'https://weather.<your-domain>'` while leaving `DEV_HTTP_BASE_URL = ''`.
+Then the one-constant upgrade for DEV: keep `npm run weather:serve` running and set
+`DEV_HTTP_BASE_URL = 'https://weather.<your-domain>'` while leaving `PULL_BASE_URL = ''`.
 `PULL_BASE_URL` accepts `https://` only; setting both constants is a startup error ("set only
-one"), so a stale dev value cannot silently win. Unverified in this pass: tunnel creation and DNS
+one"), so a stale value cannot silently win. Unverified in this pass: tunnel creation and DNS
 routing need the human's Cloudflare account and domain.
 
 ### 7. Verification checklist
 
-- [ ] `npm test` — 135 tests pass (includes the normalizer + base-URL policy).
+- [ ] `npm test` — 139 tests pass (includes the normalizer + base-URL policy).
 - [ ] `npm run typecheck` — clean.
 - [ ] `npm run weather:produce` — one summary line, file exists, validates.
 - [ ] `curl` — `200` with `Cache-Control` + `ETag`; matching `If-None-Match` → `304` (recipe in
@@ -227,16 +233,17 @@ What the phone shows on failure (contract semantics, briefly):
 
 ## When to use
 
-Run this when the app must show live data before a tunnel exists, when re-verifying the producer
-or server contract, when preparing the named-tunnel upgrade, or when a live pull fails and the
-failure must be classified.
+Run this to exercise the producer and server locally, to re-verify their contract, to expose a
+local server to a phone off the LAN (optional step 6), or when a local pull fails and the failure
+must be classified.
 
 ## When not to use
 
-Do not use it to create a public endpoint (that is step 6, and it needs the human's domain), to
-run a long-lived service for others (the 48/day ceiling and the personal-use terms forbid it), or
-to work around a cleartext block by weakening TLS. Do not run these commands from the repository
-root — there is no root package.
+Do not use it to publish the production snapshot — that is the scheduled GitHub Actions workflow
+and GitHub Pages ([ADR-0004](../adrs/adr-0004-github-pages-for-snapshots.md)); step 6 is DEV-only
+remote access and needs the human's domain. Do not run a long-lived service for others (the 48/day
+ceiling and the personal-use terms forbid it), or work around a cleartext block by weakening TLS.
+Do not run these commands from the repository root — there is no root package.
 
 ## Examples
 
@@ -253,24 +260,27 @@ Próximos 7 días: vie 13 100% 14° / 24°, sáb 14 100% 14° / 17° …
 ```
 
 Those values match the produced document field for field (14.5 °C, 89 %, 22.1 km/h ENE,
-`daily[0]` 14.2/23.8 at 100 %). The constant was then restored to `''`; the committed default is
-empty, so the shipped behaviour is still fixture-only until someone opts in. Verified over
-`adb reverse` (loopback); the LAN-IP variant is **not** verified in this pass (TD-04).
+`daily[0]` 14.2/23.8 at 100 %). The constants were then restored (`PULL_BASE_URL` back to the
+GitHub Pages origin, `DEV_HTTP_BASE_URL` empty); the shipped app pulls the Pages snapshot on cold
+start. Verified over `adb reverse` (loopback); the LAN-IP variant is **not** verified in this pass
+(TD-04).
 
 The minimal happy path, in order:
 
 ```sh
 cd apps/weather-radar && npm run weather:produce
 npm run weather:serve            # second terminal
-adb reverse tcp:8080 tcp:8080   # then set DEV_HTTP_BASE_URL and npm run android
+# in src/app/app.ts: empty PULL_BASE_URL, then set DEV_HTTP_BASE_URL = 'http://localhost:8080'
+adb reverse tcp:8080 tcp:8080
+npm run android                 # restore both constants when done
 ```
 
 ## Common mistakes
 
-- **Choosing a quick tunnel** for production: the rotating hostname silently breaks the saved URL
-  and the app falls back to the fixture.
-- **Looping the producer** to "keep it fresh": one run per 30 minutes is the ceiling; the
-  repository ships no scheduler (TD-10).
+- **Choosing a quick tunnel** for the DEV origin: the rotating hostname silently breaks the saved
+  URL and the app falls back to the fixture.
+- **Looping the producer** to "keep it fresh": one run per 30 minutes is the ceiling, and
+  `.github/workflows/weather-data.yml` already runs it on that schedule.
 - **Disabling TLS or adding a permissive `networkSecurityConfig`** when cleartext fails — use
   `adb reverse` loopback and report the failure instead.
 - **Serving with `python3 -m http.server` and calling it a contract test** — it cannot answer
@@ -282,6 +292,9 @@ adb reverse tcp:8080 tcp:8080   # then set DEV_HTTP_BASE_URL and npm run android
 
 - [weather-data-sources](../context/weather-data-sources.md) — the strategy and the 403 evidence.
 - [weather-endpoints](../context/weather-endpoints.md) — the endpoint inventory.
-- [weather-radar-debt](../context/weather-radar-debt.md) — TD-01, TD-02, TD-04, TD-10.
+- [release and update runbook](release-and-update-runbook.md) — EAS build/update and the Pages
+  deploy that supersedes the production tunnel.
+- [weather-radar-debt](../context/weather-radar-debt.md) — TD-04 (DEV-only LAN caveat), TD-10
+  (scheduler, closed), TD-13 (EAS not initialized).
 - [project](../project.md) — commands and routing.
 - `apps/weather-radar/README.md` — app-local command summary.

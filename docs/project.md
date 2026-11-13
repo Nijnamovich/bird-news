@@ -18,10 +18,12 @@ conditions, the next 24 hours and the next 7 days, rendered from one JSON docume
 analysis of a re-signed "Weather & Radar" APK, kept as a one-page summary with its evidence in
 git history.
 
-The app ships with no backend, no database and no account. Its default state is the bundled
-fixture and **zero network requests**; an optional HTTP pull reads a static snapshot served
-from a home machine. Anti-goals: no public release, no redistribution of vendor data, no
-premium/paywall bypass, no telemetry, no on-device scraping, no secrets in the repository.
+The app ships with no backend, no database and no account. A scheduled GitHub Action
+(`.github/workflows/weather-data.yml`) produces one validated snapshot and GitHub Pages serves it
+at a stable public URL; the phone reads it with **one conditional `GET`** and falls back to the
+bundled fixture whenever the pull fails. Anti-goals: no public release, no redistribution of
+vendor data, no premium/paywall bypass, no telemetry, no on-device scraping, no secrets in the
+repository.
 
 ## Technology Stack
 
@@ -45,7 +47,7 @@ premium/paywall bypass, no telemetry, no on-device scraping, no secrets in the r
 | Slice | Description | Keywords | Entry points | Primary agents |
 |---|---|---|---|---|
 | weather-app | Read-only Necochea screen: current conditions, 24 h strip, 7 day rows, freshness banner, offline states | angular, ng-native, expo, react-native, component, template, signal, fixture, banner, emulator, android, metro, vitest | `apps/weather-radar/` | coder, tester |
-| weather-data | Snapshot contract, Open-Meteo producer, static ETag server, data-source strategy and tunnel seam | openapi, snapshot, schema, etag, 304, if-none-match, open-meteo, accuweather, 403, producer, serve, tunnel, pc-pull | `apps/weather-radar/scripts/`, `docs/api/` | coder, architect, reviewer |
+| weather-data | Snapshot contract, Open-Meteo producer, scheduled GitHub Actions publisher, GitHub Pages host, local ETag server, data-source strategy and DEV tunnel seam | openapi, snapshot, schema, etag, 304, if-none-match, open-meteo, accuweather, 403, producer, serve, github-actions, github-pages, cron, tunnel, pc-pull | `apps/weather-radar/scripts/`, `.github/workflows/`, `docs/api/` | coder, architect, reviewer |
 | docs | Documentation corpus: entry point, strategic context, procedures, ADRs, tag index, debt register | frontmatter, status, hub, adr, tag-index, protocol, debt, slice, context-index | `docs/`, `docs/context/`, `docs/protocols/`, `docs/adrs/` | documenter, explorer |
 | security-audits | Original static-audit deliverable: verdict, artifact and signing identity, top findings | apk, signing, dex, manifest, audit, wetteronline, resign, evidence | `docs/security-audits/` | reviewer, explorer |
 
@@ -64,6 +66,8 @@ There is **no `package.json` at the repository root**. Every app command runs fr
 | `npx expo export --platform android` | `apps/weather-radar/` | Hermes bundle proof; needs no device |
 | `npm run weather:produce` | `apps/weather-radar/` | One Open-Meteo GET → validated, atomically written snapshot |
 | `npm run weather:serve` | `apps/weather-radar/` | Serve `weather-data/` on :8080 with `ETag` / `304` |
+| `npx eas-cli@latest build --platform android --profile preview` | `apps/weather-radar/` | Cloud-build the internal-distribution APK (needs a human `eas login`) |
+| `npx eas-cli@latest update --channel preview --environment preview --message "…"` | `apps/weather-radar/` | Publish a JS-only change over the air to the `preview` channel |
 | `node <onrails>/validate-consumer.js --root <repo>` | methodology checkout | Read-only docs-contract check; run after doc changes |
 
 ## Repository Structure
@@ -76,12 +80,13 @@ bird-news/
 │   ├── scripts/                  producer, static server, AccuWeather seam, Android launcher
 │   ├── weather-data/             generated snapshots (git-ignored)
 │   └── README.md                 app-local commands and doc pointers
+├── .github/workflows/            scheduled snapshot producer → GitHub Pages deploy
 └── docs/
     ├── project.md                canonical entry point (this file)
     ├── tag-index.md              generated tag → document surface
     ├── api/                      frozen OpenAPI contract (artifact, never hand-edited in place)
     ├── context/                  strategic docs (slice map, sources, endpoints, stack, toolchain, debt)
-    ├── protocols/                procedures run by hand (pc-pull runbook)
+    ├── protocols/                procedures run by hand (pc-pull, release and update runbooks)
     ├── adrs/                     append-only decision records + hub
     └── security-audits/          original static-audit deliverable + hub
 ```
@@ -113,7 +118,8 @@ bird-news/
   `If-None-Match` validator and the server's `ETag`.
 - **Freshness state** — `loading | fresh | stale | expired | error`, derived from the
   document's `timing` plus local receipt time.
-- **Producer** — the Node script on a home machine that fetches upstream and writes the snapshot.
+- **Producer** — the Node script that fetches upstream and writes the snapshot; it runs inside the
+  scheduled GitHub Action (or locally, for development).
 - **Slice** — a human-demarcated area of the repository; the routing unit of the Slices table.
 - **ADR** — an append-only decision record under `docs/adrs/`.
 - **TD item** — a registered technical-debt entry with an id, evidence pointer and next step.
@@ -132,9 +138,12 @@ bird-news/
   both Expo Go launch-race root causes.
 - `docs/context/weather-radar-debt.md` — the technical-debt register: open, accepted and
   closed items with evidence pointers.
-- `docs/protocols/pc-pull-runbook.md` — produce → serve → `adb reverse` → live badge, then the
-  named-tunnel upgrade.
-- `docs/adrs/adr-index.md` — decision records: ng-native stack and `pc-pull` over scraping.
+- `docs/protocols/pc-pull-runbook.md` — produce → serve → `adb reverse` → live badge, plus the
+  optional DEV tunnel.
+- `docs/protocols/release-and-update-runbook.md` — EAS login/init/configure, first APK, OTA
+  publish and rollback, version bumps, keystore backup, GitHub Pages deploy.
+- `docs/adrs/adr-index.md` — decision records: ng-native stack, `pc-pull` over scraping, EAS
+  Build/Update distribution, and GitHub Pages for snapshots.
 - `docs/tag-index.md` — generated tag → document surface.
 - `docs/api/openapi.weather-snapshot.yaml` — the canonical `WeatherSnapshot` contract.
 - `docs/security-audits/security-audits-index.md` — hub for the original audit deliverable.
@@ -146,5 +155,6 @@ bird-news/
 - "`npm run android` opens Expo Go but the screen stays blank" → `docs/context/android-toolchain.md#launch-races-blank-screen`
 - "how does a restart keep the last snapshot / reach `304`?" → `docs/context/weather-radar-slice.md#how-it-works`
 - "AccuWeather answers `HTTP 403` / `Access Denied`" → `docs/context/weather-data-sources.md#what-we-measured`
+- "how do I install the app on the phone, or ship a JS fix without a rebuild?" → `docs/protocols/release-and-update-runbook.md`
 - "`npm audit` reports 3 moderate findings" → `docs/context/weather-radar-debt.md#accepted-wont-fix`
 - "why did the repository stay on ng-native?" → `docs/adrs/adr-0001-stay-on-ng-native.md#solution`

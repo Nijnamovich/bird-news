@@ -10,6 +10,7 @@ related:
 - weather-endpoints
 - weather-stack
 - weather-radar-debt
+- release-and-update-runbook
 ---
 
 # Weather Radar — Slice Generalities
@@ -32,8 +33,8 @@ source to reconcile.
 - `src/app/app.ts` — the single screen, its styles, and the two base-URL constants.
 - `src/app/weather/` — contract types, validator, freshness state machine, providers, icons,
   formatting, bundled fixture.
-- `src/main.ts`, `src/app/icons.ts`, `app.json`, `metro.config.js`, `tsconfig.json`,
-  `vitest.config.mts`.
+- `src/main.ts`, `src/app/icons.ts`, `app.json` (including its distribution fields), `eas.json`,
+  `metro.config.js`, `tsconfig.json`, `vitest.config.mts`.
 - `apps/weather-radar/README.md` — app-local commands and doc pointers.
 
 **Out of scope — belongs elsewhere**
@@ -88,6 +89,16 @@ State ownership is deliberately narrow: the screen owns the `stored` signal and 
 flag; the cache functions are pure and take `nowMs`; providers own only transport; the
 `SnapshotStore` seam owns persistence (file on device, memory in tests).
 
+**Distribution and update.** The installed app comes from **EAS Build** (internal distribution,
+APK) and takes JS changes from **EAS Update**. `app.json` declares `version: "1.0.0"`,
+`runtimeVersion.policy: "appVersion"`, `android.package` and `android.versionCode`; `eas.json`
+holds the `preview` (APK, `channel: "preview"`) and `production` (AAB) profiles with
+`cli.appVersionSource: "local"`. The snapshot the app pulls is produced by a scheduled GitHub
+Action and served by **GitHub Pages**, and `PULL_BASE_URL` points at that origin. The decisions are
+[ADR-0003](../adrs/adr-0003-eas-build-and-update.md) and
+[ADR-0004](../adrs/adr-0004-github-pages-for-snapshots.md); the steps are the
+[release runbook](../protocols/release-and-update-runbook.md).
+
 ## Conventions of this slice
 
 - **GET only** — no body, cookies, `Authorization`, device id or user-data query parameter.
@@ -128,8 +139,13 @@ Documented, not hidden. Each item has an id in [weather-radar-debt](weather-rada
   a cold start hydrates the last pull document, sends `If-None-Match`, and treats `304` as
   "keep the bytes, reset the receipt"; resume revalidates only when stale. No pull-to-refresh
   affordance exists.
-- **No scheduler** — the producer runs by hand or from the operator's cron (TD-10).
-- **LAN cleartext pull unverified** — only the `adb reverse` loopback path was measured (TD-04).
+- **Producer scheduling is best-effort** — the GitHub Actions workflow runs on a 30-minute cron
+  (TD-10 closed), but GitHub delays or skips runs and disables schedules after 60 days of
+  inactivity; the ceiling is still ≤ 48 fetches/day.
+- **LAN cleartext pull unverified** — only the `adb reverse` loopback path was measured; this is a
+  **DEV-only** concern, since production reads HTTPS from GitHub Pages (TD-04).
+- **No APK yet / EAS project not initialized** — `extra.eas.projectId` and `updates.url` are absent
+  until a human runs `eas init` and `eas update:configure` (TD-13).
 - **iOS unverified** — declared in `app.json`, never built or run (TD-07).
 - **AccuWeather remains a disabled seam** — blocked by a measured 403 (TD-05).
 - **`npm audit` reports 3 moderate findings** in Expo's transitive tree (TD-09).

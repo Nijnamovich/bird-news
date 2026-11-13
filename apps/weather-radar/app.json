@@ -3,6 +3,9 @@
     "name": "weather-radar",
     "slug": "weather-radar",
     "version": "1.0.0",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
     "platforms": [
       "ios",
       "android"
@@ -14,6 +17,8 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.nijnamovich.weather",
+      "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",

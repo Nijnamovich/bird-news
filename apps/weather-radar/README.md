@@ -6,6 +6,8 @@ construction: one parameterless `GET`, no body, cookies, authorization header, d
 or user-data query parameter.
 
 ng-native 0.22.2 / Expo SDK 58 / React Native 0.88 / Angular 22. Not an Angular CLI workspace.
+In production the app pulls its snapshot from GitHub Pages; Expo Go plus the local producer below
+is the development loop.
 
 The last pull document is kept in Expo's document directory and revalidated with
 `If-None-Match` on the next cold start (and on resume only when stale), so an offline restart
@@ -36,6 +38,10 @@ Canonical documentation entry point: [`docs/project.md`](../../docs/project.md).
 - Slice map and accepted gaps: [`docs/context/weather-radar-slice.md`](../../docs/context/weather-radar-slice.md)
 - Data sources and why `pc-pull`: [`docs/context/weather-data-sources.md`](../../docs/context/weather-data-sources.md)
 - Network endpoints: [`docs/context/weather-endpoints.md`](../../docs/context/weather-endpoints.md)
-- Live-data procedure (produce → serve → `adb reverse` → named tunnel):
+- Live-data procedure (produce → serve → `adb reverse`; optional DEV tunnel):
   [`docs/protocols/pc-pull-runbook.md`](../../docs/protocols/pc-pull-runbook.md)
+- Install the APK, ship an OTA update, and publish snapshots:
+  [`docs/protocols/release-and-update-runbook.md`](../../docs/protocols/release-and-update-runbook.md)
+- Distribution and hosting decisions: [`docs/adrs/adr-0003-eas-build-and-update.md`](../../docs/adrs/adr-0003-eas-build-and-update.md),
+  [`docs/adrs/adr-0004-github-pages-for-snapshots.md`](../../docs/adrs/adr-0004-github-pages-for-snapshots.md)
 - Debt and known limits: [`docs/context/weather-radar-debt.md`](../../docs/context/weather-radar-debt.md)

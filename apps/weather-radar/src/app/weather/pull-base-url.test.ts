@@ -24,6 +24,22 @@ describe('checkedPullBaseUrl', () => {
     });
   });
 
+  test('should preserve a project-site path prefix', () => {
+    expect(checkedPullBaseUrl('https://nijnamovich.github.io/bird-news', PRODUCTION)).toEqual({
+      ok: true,
+      value: 'https://nijnamovich.github.io/bird-news',
+    });
+  });
+
+  test('should preserve a project-site path prefix and strip its trailing slash', () => {
+    expect(
+      checkedPullBaseUrl('https://nijnamovich.github.io/bird-news/', PRODUCTION),
+    ).toEqual({
+      ok: true,
+      value: 'https://nijnamovich.github.io/bird-news',
+    });
+  });
+
   test('should reject http when dev HTTP is not allowed', () => {
     const result = checkedPullBaseUrl('http://localhost:8080', PRODUCTION);
     expect(result.ok).toBe(false);

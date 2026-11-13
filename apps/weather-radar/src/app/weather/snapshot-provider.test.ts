@@ -115,6 +115,34 @@ describe('HttpPullSnapshotProvider', () => {
     expect(calls[0].url).toBe(`${BASE_URL}/weather/necochea/v1/latest.json`);
   });
 
+  test('should preserve a project-site path prefix when composing the snapshot URL', async () => {
+    const { fetchImpl, calls } = fakeFetch(() => Response.json(fixture));
+    const provider = new HttpPullSnapshotProvider({
+      baseUrl: 'https://nijnamovich.github.io/bird-news',
+      fetchImpl,
+    });
+
+    await provider.load();
+
+    expect(calls[0].url).toBe(
+      'https://nijnamovich.github.io/bird-news/weather/necochea/v1/latest.json',
+    );
+  });
+
+  test('should keep a project-site path prefix when it has a trailing slash', async () => {
+    const { fetchImpl, calls } = fakeFetch(() => Response.json(fixture));
+    const provider = new HttpPullSnapshotProvider({
+      baseUrl: 'https://nijnamovich.github.io/bird-news/',
+      fetchImpl,
+    });
+
+    await provider.load();
+
+    expect(calls[0].url).toBe(
+      'https://nijnamovich.github.io/bird-news/weather/necochea/v1/latest.json',
+    );
+  });
+
   test('should reject a non-https base URL', () => {
     expect(
       () =>

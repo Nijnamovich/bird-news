@@ -10,6 +10,7 @@ related:
 - weather-endpoints
 - weather-radar-debt
 - pc-pull-runbook
+- release-and-update-runbook
 moved_from:
 - docs/weather/data-sources.md
 ---
@@ -20,24 +21,24 @@ moved_from:
 
 The app needs current conditions, a 24-hour forecast and a 7-day forecast for Necochea,
 Argentina, on an Android phone, with no backend of its own and no vendor SDK. That leaves three
-places the data can come from: the phone fetches a public weather page directly, a home computer
-fetches and normalises the data and the phone pulls the finished snapshot, or a home computer
-pushes the snapshot to the phone. The question is which becomes the default, what breaks when it
-fails, and what the phone shows while it is broken.
+places the data can come from: the phone fetches a public weather page directly, a scheduled job
+fetches and normalises the data and the phone pulls the finished snapshot from a static host, or
+the job pushes the snapshot to the phone. The question is which becomes the default, what breaks
+when it fails, and what the phone shows while it is broken.
 
 ## Solution
 
 ### The three strategies
 
-| | On-device scrape | PC produces + phone pulls | PC pushes |
+| | On-device scrape | Scheduled producer + phone pulls | Producer pushes |
 | --- | --- | --- | --- |
-| **What runs where** | A parser inside the app fetches the vendor page and extracts values on the phone | A small producer on a PC (cron / timer every 30 min) fetches upstream, normalises it, writes one JSON snapshot; the phone does a `GET` of that snapshot | The same producer, but it initiates delivery to the phone |
-| **Transport** | HTTPS `GET` from the phone to the vendor | HTTPS `GET` from the phone to a stable host serving a static file; HTTPS `GET` from the PC to the vendor | Push channel (remote push, or a message queue the phone subscribes to) |
-| **Auth / trust** | None available; the vendor treats the phone as a bot | None on the phone side; the static file is public-but-unlisted. The PC holds no vendor credentials either | Requires a push service, device tokens and a sender identity — a credential and a registration step |
+| **What runs where** | A parser inside the app fetches the vendor page and extracts values on the phone | A producer runs in a **GitHub Actions** job on a 30-minute cron, fetches upstream, normalises it and writes one JSON snapshot; **GitHub Pages** serves it; the phone does a `GET` of that snapshot | The same producer, but it initiates delivery to the phone |
+| **Transport** | HTTPS `GET` from the phone to the vendor | HTTPS `GET` from the phone to GitHub Pages (stable public URL); HTTPS `GET` from the runner to the vendor | Push channel (remote push, or a message queue the phone subscribes to) |
+| **Auth / trust** | None available; the vendor treats the phone as a bot | None on the phone side; the Pages site is public. The producer holds no vendor credentials either | Requires a push service, device tokens and a sender identity — a credential and a registration step |
 | **Data quality** | Whatever the page renders; fragile against markup and anti-bot changes | Normalised once, validated against the contract, identical for every consumer | Same normalisation as pull, but delivery timing is opaque |
-| **Freshness** | Only as fresh as the last successful on-device fetch | 30-minute producer cadence; the phone revalidates on cold start in this version | Producer decides; the phone has no say |
-| **Phone-only?** | Yes | No — needs the PC reachable at least occasionally (soft dependency) | No — needs the PC and a push service |
-| **Failure modes** | 403/429, bot challenge, JS-only page, regex/DOM drift, battery/Doze | PC asleep, tunnel hostname change, half-written file, stale edge cache | All pull failures plus push registration, token expiry, delivery delay |
+| **Freshness** | Only as fresh as the last successful on-device fetch | 30-minute Actions cron (best-effort); the phone revalidates on cold start in this version | Producer decides; the phone has no say |
+| **Phone-only?** | Yes | No — needs GitHub's scheduler and Pages; no personal machine has to be awake | No — needs the producer and a push service |
+| **Failure modes** | 403/429, bot challenge, JS-only page, regex/DOM drift, battery/Doze | Scheduled run delayed or skipped, Pages deploy failure, half-written file, stale edge cache | All pull failures plus push registration, token expiry, delivery delay |
 | **Verdict** | **Experimental / not implemented** | **Recommended production mode** | **Future** |
 
 The contract is the same for all three: one `SnapshotProvider` interface,
@@ -56,9 +57,36 @@ them, and there is no implementation to construct.
 There is **no single constant that switches provider**. The screen constructs the fixture
 provider and the pull provider; the switch is the resolved base URL:
 
-- **empty** (the shipped default) → fixture only, **zero network requests**;
+- **empty** → fixture only, **zero network requests**;
 - **set to an `https://` origin** → the persisted last-known-good paints on later starts
   (the fixture on a true first run), then one conditional `GET` on cold start.
+
+`PULL_BASE_URL` is committed as the GitHub Pages origin, so the shipped app performs that one
+`GET`; emptying both constants restores fixture-only behaviour.
+
+### Hosting
+
+The snapshot is produced by `.github/workflows/weather-data.yml` (cron `*/30 * * * *` plus
+`workflow_dispatch`, Node 24, `npm run weather:produce` in `apps/weather-radar`) and served by
+**GitHub Pages**:
+
+- **URL** — `https://nijnamovich.github.io/bird-news/weather/necochea/v1/latest.json`. A project
+  site keeps the repository name in the path, so the uploaded artifact directory is exactly
+  `apps/weather-radar/weather-data`.
+- **Public by construction** — Pages on GitHub's Free plan serves public repositories only, and a
+  Pages site is public. The repository is public, so the snapshot is readable by anyone with the
+  URL. It carries weather data and Open-Meteo attribution, no personal data.
+- **No commit-back** — the workflow deploys the artifact; `weather-data/` stays git-ignored and no
+  data enters git history.
+- **Best-effort cadence** — GitHub delays or skips scheduled runs and disables schedules after 60
+  days of repository inactivity; the schedule fires only from the default branch's copy of the
+  workflow.
+
+The hosting decision is [ADR-0004](../adrs/adr-0004-github-pages-for-snapshots.md); the deploy
+steps are in the [release runbook](../protocols/release-and-update-runbook.md). The frozen v1.0.0
+contract (`docs/api/openapi.weather-snapshot.yaml`) still contains prose saying no scheduler ships
+with the repository; the contract itself is unchanged and is not hand-edited in place — the
+scheduler is described here and in ADR-0004.
 
 ### What we measured
 
@@ -96,12 +124,15 @@ Two honest caveats:
 
 ### Recommendation and decision
 
-**`pc-pull` is the production mode.** The app ships with both base-URL constants empty, so it
-renders the persisted last-known-good (or the bundled `fixture` on a first run) and makes
-**zero network requests** until an origin is set.
+**`pc-pull` is the production mode.** The app ships with `PULL_BASE_URL` set to the GitHub Pages
+origin and `DEV_HTTP_BASE_URL` empty, so a cold start paints the persisted last-known-good (the
+bundled `fixture` on a true first run) and then performs one conditional `GET`; emptying
+`PULL_BASE_URL` restores the zero-network mode.
 `phone-scrape` stays unimplemented (blocked by the measured 403); `push` stays a future option.
 The decision and its rejected alternatives are recorded in
-[ADR-0002](../adrs/adr-0002-pc-pull-over-on-device-scrape.md).
+[ADR-0002](../adrs/adr-0002-pc-pull-over-on-device-scrape.md); the move away from the documented
+home-machine tunnel to GitHub Pages is
+[ADR-0004](../adrs/adr-0004-github-pages-for-snapshots.md).
 
 Why this option wins today:
 
@@ -109,10 +140,10 @@ Why this option wins today:
   alternative returns an access-denied page.
 - The phone stays **out of the anti-bot arms race**. If AccuWeather changes its markup or
   challenge, one producer on one machine adapts; the app does not ship a new APK.
-- The PC dependency is **soft, not hard**: the snapshot is a static file, the app keeps the last
-  good copy on the device and revalidates it on the next launch, and the bundled fixture covers
-  the very first launch. A phone that never reaches the PC still shows *something* and says how
-  old it is.
+- The host dependency is **soft, not hard**: the snapshot is a static file, the app keeps the
+  last good copy on the device and revalidates it on the next launch, and the bundled fixture
+  covers the very first launch. A phone that never reaches GitHub Pages still shows *something*
+  and says how old it is.
 - It keeps the **offline path** intact: fixture → persisted last-known-good → stale badge. No
   network is a normal state, not a crash.
 
@@ -123,10 +154,12 @@ and it costs a push service and a device-token lifecycle.
 
 | Failure | What happens | What the phone shows |
 | --- | --- | --- |
-| **PC asleep** | Pull fails at the transport layer (`UPSTREAM_UNAVAILABLE`) | The persisted last-known-good document, or the fixture on a true first run; an age badge keeps aging |
-| **Tunnel hostname rotation** | The saved production URL stops resolving | Transport error; the fixture or persisted last-known-good stays. Fix: a **named tunnel with a custom domain**, never a quick tunnel whose hostname changes on restart |
+| **Scheduled run delayed or skipped** | GitHub's cron is best-effort; the previously deployed document stays live | The last deployed snapshot remains readable and its age badge grows; a cold start with no network falls back to the persisted last-known-good or the fixture |
+| **Pages deploy failure / wrong artifact path** | The project site returns `404` or keeps the previous deploy | Transport failure or `HTTP_ERROR`; the persisted last-known-good or the fixture stays. Fix: upload exactly `apps/weather-radar/weather-data` |
+| **DEV tunnel hostname rotation** (development only) | A quick tunnel's hostname changes on restart, so a saved `DEV_HTTP_BASE_URL` stops resolving | Transport error; the persisted last-known-good or the fixture stays. Production is unaffected — it reads HTTPS from GitHub Pages |
+| **Repository rename** | The Pages project-site prefix changes, so the committed `PULL_BASE_URL` stops resolving | Transport error; the persisted last-known-good or the fixture stays. A new URL needs a new binary or an OTA update |
 | **Half-written file** | The producer is mid-write when the phone reads | Invalid JSON → `PARSE_ERROR`; JSON that fails the schema → `SCHEMA_INVALID`. The previous document stays on screen |
-| **Stale edge cache** | A CDN or proxy serves an older snapshot | Values look old; the `timing` block still tells the truth. `Cache-Control: max-age=300, must-revalidate` bounds the damage |
+| **Stale edge cache** | A cache serves an older snapshot | Values look old; the `timing` block still tells the truth. The local Node server sends `Cache-Control: max-age=300, must-revalidate`; GitHub Pages' cache TTL and conditional-GET behaviour are **unmeasured** (ADR-0004) |
 | **Doze / battery** | Android defers background work | No background refresh exists: this version revalidates on **cold start**, and on resume only when the document is stale |
 | **Clock skew** | Device clock differs from the producer's | `CLOCK_SKEW` is a **producer-side** error code; the client never emits it. The client derives age locally and purges a cached document at 7 days of local receipt age |
 | **Rate limit / 429** | Producer or upstream refuses | `RATE_LIMITED`, wait at least `Retry-After`, keep the current document |
@@ -139,10 +172,12 @@ and it costs a push service and a device-token lifecycle.
 
 ### Refresh cadence
 
-- **Producer:** at most one fetch every **30 minutes** — 48 upstream fetches per day. The
-  repository ships **no scheduler**: the command is run by hand (`npm run weather:produce`) or
-  from the operator's own cron, and the ceiling is a rule to keep, not an automatic guarantee
-  (TD-10).
+- **Producer:** at most one fetch every **30 minutes** — 48 upstream fetches per day.
+  `.github/workflows/weather-data.yml` runs the producer on a `*/30 * * * *` cron plus
+  `workflow_dispatch` and deploys the result to GitHub Pages (TD-10 closed). GitHub's scheduler is
+  **best-effort**: runs can be delayed or skipped, and schedules are disabled after 60 days of
+  repository inactivity — the ceiling is respected by the cron, not enforced by it. The same
+  command (`npm run weather:produce`) still runs locally.
 - **App:** revalidates **once per cold start** (conditionally, with the persisted `snapshotId`)
   and again when the app returns to the foreground **only if the document is stale**
   (`freshness().shouldRevalidate`). A fresh document produces zero requests, and there is still
@@ -183,32 +218,38 @@ A cold start with everything configured correctly:
 
 1. On a true first run the fixture paints immediately (`Datos de ejemplo · sin conexión`);
    later cold starts hydrate the persisted pull document before the first paint.
-2. One `GET https://<host>/weather/necochea/v1/latest.json` runs. `If-None-Match` is omitted on
-   a first run (the held document is the fixture) and sent with the persisted `snapshotId`
-   otherwise.
+2. One `GET https://nijnamovich.github.io/bird-news/weather/necochea/v1/latest.json` runs.
+   `If-None-Match` is omitted on a first run (the held document is the fixture) and sent with the
+   persisted `snapshotId` otherwise.
 3. A 200 + valid document replaces the held one; the banner becomes `Actualizado hace …`.
 4. A 304 keeps the held document and only restarts its local receipt clock; no follow-up request
    is issued.
 
-With both constants empty (the committed state), step 2 never happens and no socket is opened.
+With `PULL_BASE_URL` emptied, step 2 never happens and no socket is opened.
 
 ## Common mistakes
 
-- **Setting a quick tunnel** (`trycloudflare.com`) as the production origin: its hostname rotates
-  on restart, the saved URL breaks, and the app keeps the persisted last-known-good (or the
-  fixture on a first run).
+- **Setting a quick tunnel** (`trycloudflare.com`) as a **DEV** origin: its hostname rotates on
+  restart, the saved URL breaks, and the app silently falls back to the fixture. Production reads
+  GitHub Pages and has this problem only if the repository is renamed — the project-site prefix is
+  part of `PULL_BASE_URL`, so a rename needs a new binary.
 - **Assuming the phone scrape is merely untested** — it is measured-blocked (403) and the page is
   a JS SPA; a 200 would still not make a regex parser viable.
 - **Treating the fixture as a network failure**: it is bundled data, labelled as a sample, and
   the intended first paint.
 - **Adding a background timer** to "keep data fresh": it burns battery, Expo Go cannot run it
   reliably, and the producer only changes twice an hour.
-- **Turning the 48/day ceiling into an automatic claim** — no scheduler ships with the repo.
+- **Treating the GitHub Actions cron as exact** — it is best-effort, can be delayed or skipped, and
+  is disabled after 60 days of repository inactivity.
+- **Calling the published snapshot private** — a Pages site on the Free plan is public.
 
 ## References
 
 - [ADR-0002 — pc-pull over on-device scrape](../adrs/adr-0002-pc-pull-over-on-device-scrape.md)
-- [pc-pull runbook](../protocols/pc-pull-runbook.md) — the commands and the tunnel upgrade.
+- [ADR-0004 — GitHub Pages for snapshots](../adrs/adr-0004-github-pages-for-snapshots.md)
+- [pc-pull runbook](../protocols/pc-pull-runbook.md) — the local produce/serve loop.
+- [release and update runbook](../protocols/release-and-update-runbook.md) — EAS build/update and
+  the Pages deploy.
 - [weather-endpoints](weather-endpoints.md) — every endpoint and its justification.
-- [weather-radar-debt](weather-radar-debt.md) — TD-01, TD-02, TD-03, TD-10.
+- [weather-radar-debt](weather-radar-debt.md) — TD-01, TD-02, TD-03, TD-10 (closed), TD-13.
 - `docs/api/openapi.weather-snapshot.yaml` — the contract every provider must satisfy.

@@ -1,5 +1,5 @@
 import { cleanup, render, screen, settle } from '@ng-native/testing';
-import { afterEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { App } from './app.ts';
 import {
   APP_LIFECYCLE,
@@ -20,8 +20,20 @@ const BASE_URL = 'http://localhost:8080';
 const SNAPSHOT_ID = 'b'.repeat(64);
 const FIXTURE_BANNER = 'Datos de ejemplo · sin conexión';
 
+beforeEach(() => {
+  // The shipped pull origin is non-empty, so the App constructor tries a real
+  // fetch. Stub it to keep this component test offline and deterministic.
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => {
+      throw new Error('network disabled in tests');
+    }),
+  );
+});
+
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
 });
 
 /** A schema-valid pull document derived from the bundled fixture. */
@@ -110,8 +122,8 @@ function headersOf(call: FakeCall): Record<string, string> {
 }
 
 /**
- * Hermetic component test: the bundled fixture only. `PULL_BASE_URL` is the
- * empty string, so the screen makes no network call.
+ * Hermetic component test: the bundled fixture only. The pull origin is
+ * stubbed, so the screen renders without any network call.
  */
 describe('App', () => {
   test('should render the fixture screen with 24 hour cards and 7 day rows', async () => {
