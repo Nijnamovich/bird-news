@@ -14,7 +14,7 @@
 //     never sees a half-written snapshot.
 //
 // Open-Meteo returns real data with no key and requires attribution
-// (CC BY 4.0, non-commercial); see the runbook at docs/weather/pc-pull-runbook.md.
+// (CC BY 4.0, non-commercial); see the runbook at docs/protocols/pc-pull-runbook.md.
 
 import { createHash } from 'node:crypto';
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
