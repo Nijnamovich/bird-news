@@ -63,7 +63,7 @@ regenerated. One source change was required: React Native 0.88 types `AppRegistr
 runnable as `AppParameters` with an opaque `RootTag`, so `src/main.ts` no longer annotates
 `rootTag` by hand.
 
-Verified 2026-11-13: `npm test` **135/135**, `npm run typecheck` clean, `npx expo export
+Verified 2026-11-13: `npm test` **139/139**, `npm run typecheck` clean, `npx expo export
 --platform android` bundles (1129 modules → ~4 MB Hermes), and a cold start on the `pixel` AVD
 (API 36) with Expo Go **58.0.5** painted the reduced screen. With the DEV constant temporarily
 pointing at the local producer, the same build rendered the live Open-Meteo document.
@@ -96,7 +96,7 @@ The version check that caught the peer drift during the upgrade:
 ```sh
 cd apps/weather-radar
 npx expo install --check     # reports packages whose version disagrees with the SDK pin
-npm test                     # 135 tests
+npm test                     # 139 tests
 npm run typecheck            # ngc --noEmit
 npx expo export --platform android
 ```

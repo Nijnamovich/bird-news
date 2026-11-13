@@ -43,10 +43,10 @@ At most `Accept: application/json` plus the conditional `If-None-Match` validato
 
 | Endpoint | Status | Called by the app? | Justification |
 | --- | --- | --- | --- |
-| *(none)* | — | **No** | With both base-URL constants empty (the default), the app renders the bundled fixture and makes zero network calls. |
-| `GET https://<stable-host>/weather/necochea/v1/latest.json` | optional, read-only, unauthenticated; ETag/304 supported | **Only when a base URL is set** | The single snapshot document (`WeatherSnapshot` v1.0.0). Fired once on cold start after hydrating the persisted document, and on a return to the foreground only when that document is stale. The client sends `If-None-Match: "<snapshotId>"` for a pulled document it holds and keeps that document on `304`; no polling timer, no query string, redirects refused. |
-| `https://www.accuweather.com/es/ar/necochea/2924/weather-forecast/2924` | **HTTP 403** on a plain GET (measured 2026-11-12: 436 B, `<TITLE>Access Denied</TITLE>`, no `__NEXT_DATA__`, no `application/ld+json`) | **No** | Producer-side source only, and currently disabled. A phone-side scrape is blocked, so `phone-scrape` is not implemented. If ever enabled from a PC it would be personal/educational, once per 30 min at most, with attribution carried in every document. |
-| `https://api.open-meteo.com/v1/forecast` | **HTTP 200**, keyless, ~10.8 kB JSON (verified 2026-11-13) | **No** — never by the app; only by `npm run weather:produce` on the PC | The implemented producer source. Attribution CC BY 4.0 is stored in every document and displayed on screen. |
+| *(none)* | — | **No** | Fixture-only mode: with both base-URL constants empty the app renders the bundled fixture and makes zero network calls. Not the shipped configuration any more — `PULL_BASE_URL` points at GitHub Pages. |
+| `GET https://nijnamovich.github.io/bird-news/weather/necochea/v1/latest.json` | optional, read-only, unauthenticated; ETag/304 supported by the producer contract, not yet measured on Pages | **Yes** — the committed `PULL_BASE_URL`; one call on cold start, and on a return to the foreground only when the document is stale | The single snapshot document (`WeatherSnapshot` v1.0.0), served by GitHub Pages from a scheduled GitHub Actions producer. The client sends `If-None-Match: "<snapshotId>"` when it holds a pull-sourced document and keeps that document on `304`; no polling timer, no query string, redirects refused. |
+| `https://www.accuweather.com/es/ar/necochea/2924/weather-forecast/2924` | **HTTP 403** on a plain GET (measured 2026-11-12: 436 B, `<TITLE>Access Denied</TITLE>`, no `__NEXT_DATA__`, no `application/ld+json`) | **No** | Producer-side source only, and currently disabled. A phone-side scrape is blocked, so `phone-scrape` is not implemented. If ever enabled from a producer host it would be personal/educational, once per 30 min at most, with attribution carried in every document. |
+| `https://api.open-meteo.com/v1/forecast` | **HTTP 200**, keyless, ~10.8 kB JSON (verified 2026-11-13) | **No** — never by the app; only by `npm run weather:produce` (scheduled Actions run or local) | The implemented producer source. Attribution CC BY 4.0 is stored in every document and displayed on screen. |
 
 ### Removed endpoints
 
@@ -78,18 +78,23 @@ matching code path is documentation rot, not a plan.
 
 ## Examples
 
-The two default states, spelled out:
+The states, spelled out:
 
-- **Committed default** — `PULL_BASE_URL = ''`, `DEV_HTTP_BASE_URL = ''`: the app makes **zero**
-  requests. The endpoint table's first row is the whole network surface.
-- **DEV on a USB device** — `DEV_HTTP_BASE_URL = 'http://localhost:8080'` + `adb reverse
-  tcp:8080 tcp:8080`: exactly one `GET http://localhost:8080/weather/necochea/v1/latest.json`,
-  which never leaves the phone's loopback.
+- **Committed default** — `PULL_BASE_URL = 'https://nijnamovich.github.io/bird-news'`,
+  `DEV_HTTP_BASE_URL = ''`: one conditional `GET` of the Pages snapshot on cold start, and the
+  bundled fixture whenever it fails.
+- **DEV on a USB device** — first empty `PULL_BASE_URL`, then set `DEV_HTTP_BASE_URL =
+  'http://localhost:8080'` + `adb reverse tcp:8080 tcp:8080`: exactly one
+  `GET http://localhost:8080/weather/necochea/v1/latest.json`, which never leaves the phone's
+  loopback. Setting both constants is a startup error.
+- **Fixture only (opt-out)** — empty both constants: **zero** requests; the endpoint table's first
+  row is the whole network surface.
 
 ## Common mistakes
 
 - **Listing the producer's upstream as an app endpoint.** Open-Meteo and AccuWeather are called
-  by the PC script, never by the phone; the table's "Called by the app?" column is the guard.
+  by the producer script (scheduled GitHub Action or local run), never by the phone; the table's
+  "Called by the app?" column is the guard.
 - **Reintroducing a polling timer** "because the endpoint supports ETag": the contract is one
   conditional GET per cold start plus a stale-only foreground revalidation, and a fetch timer
   violates the 48/day ceiling.

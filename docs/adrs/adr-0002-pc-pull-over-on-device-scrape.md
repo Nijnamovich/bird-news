@@ -21,6 +21,13 @@ status: active
 
 # ADR-0002: PC Pull Over On-Device Scrape
 
+> **Amended 2026-11-13.** Items 4 and 6 below describe the state before distribution was
+> automated: the shipped default is no longer offline (the committed `PULL_BASE_URL` is the
+> GitHub Pages origin) and a scheduler now ships as `.github/workflows/weather-data.yml`. The
+> `pc-pull` decision itself stands. Hosting moved from a home-machine tunnel to GitHub Pages
+> ([ADR-0004](adr-0004-github-pages-for-snapshots.md)); the binary comes from EAS Build and takes
+> JS changes from EAS Update ([ADR-0003](adr-0003-eas-build-and-update.md)).
+
 ## Problem
 
 The app needs weather data for Necochea without a backend of its own. Three strategies were
