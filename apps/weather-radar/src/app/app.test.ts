@@ -241,6 +241,42 @@ describe('App', () => {
     expect(lifecycle.listenerCount).toBe(0);
   });
 
+  test('should re-anchor the clock on resume so a document that aged in background revalidates', async () => {
+    const persisted: StoredSnapshot = {
+      doc: pullDoc({ temperature: 27 }),
+      receivedAtLocalMs: Date.now() - 60_000,
+    };
+    const store = new RecordingStore(persisted);
+    const lifecycle = new FakeLifecycle();
+    const { fetchImpl, calls } = fakeFetch(() => new Response(null, { status: 304 }));
+
+    const result = await render(App, {
+      providers: [
+        { provide: SNAPSHOT_STORE, useValue: store },
+        { provide: SNAPSHOT_PULL_PROVIDER, useValue: pullProvider(fetchImpl) },
+        { provide: APP_LIFECYCLE, useValue: lifecycle },
+      ],
+    });
+    try {
+      await settle();
+      expect(calls).toHaveLength(1);
+
+      // The interval cannot tick while Android has the app backgrounded, so the
+      // signal is still fresh when the app returns two hours later.
+      const spy = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 2 * 3_600_000);
+      try {
+        lifecycle.emitActive();
+        await settle();
+      } finally {
+        spy.mockRestore();
+      }
+
+      expect(calls).toHaveLength(2);
+    } finally {
+      result.unmount();
+    }
+  });
+
   test('should revalidate on resume when stale, collapsing a burst into one request', async () => {
     const staleFetchedAtMs = Date.now() - 2 * 3_600_000;
     const staleDoc = pullDoc({ temperature: 27, fetchedAtMs: staleFetchedAtMs });

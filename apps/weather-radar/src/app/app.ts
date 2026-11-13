@@ -588,7 +588,14 @@ export class App {
     // collapse into the one in-flight request (`refreshing`).
     if (this.lifecycle !== null) {
       this.unsubscribeLifecycle = this.lifecycle.onForeground(() => {
-        if (!this.destroyed && this.freshness().shouldRevalidate) {
+        if (this.destroyed) {
+          return;
+        }
+        // JS timers are suspended in the background, so the signal still holds
+        // the pre-background instant. Re-anchor it before deciding: a document
+        // that aged while backgrounded must count as stale now.
+        this.nowMs.set(Date.now());
+        if (this.freshness().shouldRevalidate) {
           void this.refresh();
         }
       });
