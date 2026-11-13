@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-11-12
+last_updated: 2026-11-13
 status: current
 description: Keep / rewrite / delete inventory for the reduction from the radar visual clone to the minimal weather app.
 tags: [weather, prune, inventory, refactor, radar]
@@ -64,10 +64,10 @@ day rows.
 | `docs/api/openapi.weather-snapshot.yaml` | **new** | Canonical contract for the snapshot | — |
 | `docs/weather/data-sources.md` | **new** | Answers "how does the data get updated"; records the 403 evidence and the `pc-pull` recommendation | — |
 | `docs/weather/prune-inventory.md` | **new** | This file | — |
-| `docs/weather/widget-and-stack.md` | **new** | Stack check, widget feasibility and the JDK 27 build blocker | — |
+| `docs/weather/stack-and-upgrade.md` | **new** | Stack lineage versus the newest upstream, plus the framework option comparison | — |
 | `apps/weather-radar/README.md` | **rewrite** | Still says "My Angular Native app"; describes the radar demo | Reduced app, commands, module map, contract link |
 | `apps/weather-radar/ENDPOINTS.md` | **rewrite** | Lists WetterOnline radar/webcam endpoints as if they still existed | Zero-live-default + optional `pc-pull` + producer-side AccuWeather note |
-| `docs/security-audits/**` | **pending human approval** | This is the repository's **original deliverable** per `docs/project.md`: the static audit of the modded APK. Not part of the app reduction and never deleted by this change | Proposed: keep exactly as-is |
+| `docs/security-audits/**` | **trimmed to a one-page summary** | This is the repository's **original deliverable** per `docs/project.md`: the static audit of the modded APK. `report.md` now carries the verdict, identity, signing facts and top findings; the full evidence is preserved at commit `ce4ca74` | `report.md` (evidence at `ce4ca74`) |
 | Root `README.md` / root docs | **none present** | There is no root README to update; `docs/project.md` is the entry point | — |
 | `package.json` / `package-lock.json` | **keep** | Command names and dependency versions are a separate concern; the reduction does not require a dependency change | — |
 | `app.json` | **keep** | Expo identity, icons and the `@ng-native/metro` plugin are still correct | — |
@@ -100,9 +100,7 @@ commit where the app renders an empty screen.
   7 day rows) and `npx expo export --platform android` bundles it (1099 modules
   → 3.5 MB Hermes). The software-GL emulator raised its own System UI ANR during
   the run, so a GPU-backed re-run is a nice-to-have, not an open blocker.
-- **Persistence** of the snapshot for the Android widget. The cache is in memory
-  only; there is no AsyncStorage/MMKV layer today.
+- **Persistence** of the snapshot. The cache is in memory only; there is no
+  AsyncStorage/MMKV layer today.
 - **Revalidation on resume and pull-to-refresh.** This version revalidates on
   cold start only.
-- **Widget build** (APK + Kotlin `AppWidgetProvider`); see
-  `docs/weather/widget-and-stack.md`.

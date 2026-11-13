@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-11-12
+last_updated: 2026-11-13
 status: current
 description: How the weather data gets updated — the three producer strategies, the measured AccuWeather block, and the pc-pull recommendation.
 tags: [weather, data-sources, providers, pc-pull, scrape, freshness]
@@ -132,7 +132,7 @@ device-token lifecycle.
 | **Tunnel hostname rotation** | The saved `PULL_BASE_URL` stops resolving | Transport error; the fixture or in-session last-known-good stays. Fix: a **named tunnel with a custom domain**, never a quick tunnel whose hostname changes on restart |
 | **Half-written file** | The producer is mid-write when the phone reads | Invalid JSON → `PARSE_ERROR`; JSON that fails the schema → `SCHEMA_INVALID`. The previous document stays on screen |
 | **Stale edge cache** | A CDN or proxy serves an older snapshot | Values look old; the `timing` block still tells the truth. `Cache-Control: max-age=300, must-revalidate` bounds the damage |
-| **Doze / battery** | Android defers background work | No background refresh exists: this version revalidates on **cold start only** (resume and pull-to-refresh are follow-ups). Widget ticks may be deferred (see `docs/weather/widget-and-stack.md`) |
+| **Doze / battery** | Android defers background work | No background refresh exists: this version revalidates on **cold start only** (resume and pull-to-refresh are follow-ups) |
 | **Clock skew** | Device clock differs from the producer's | `CLOCK_SKEW` is a **producer-side** error code; the client never emits it. The client derives age locally and purges a cached document at 7 days of local receipt age, so a skewed producer clock cannot keep an old copy alive |
 | **Rate limit / 429** | Producer or upstream refuses | `RATE_LIMITED`, wait at least `Retry-After`, keep the current document |
 | **304 Not Modified** | The client sent `If-None-Match: "<snapshotId>"` and the producer's copy is unchanged | Keep the cached document and refresh its local receipt time; no re-render |
@@ -150,12 +150,6 @@ device-token lifecycle.
   resume hook and no pull-to-refresh yet — both are follow-ups — and no
   background timers: Expo Go cannot run them reliably, and a timer would only
   burn battery to re-read a file that changes twice an hour.
-- **Widget:** floor of **30 minutes**, imposed by Android. With
-  `updatePeriodMillis` the minimum accepted value is `1800000` ms; with
-  `WorkManager` the same 30-minute floor applies. The widget must read a
-  **persisted** copy of the snapshot; the app's cache is in memory only today,
-  so that persistence is part of the widget follow-up. Either way the widget
-  never performs its own vendor fetch.
 
 ## 7. Terms of service and the read-only contract
 

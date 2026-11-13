@@ -69,11 +69,7 @@ and pull-to-refresh are follow-ups.
 
 ## Known limits
 
-- Expo Go is enough for development, but an **Android home-screen widget is not
-  possible in Expo Go**: it needs a real APK (`expo prebuild` + a Kotlin
-  `AppWidgetProvider`). See
-  [`docs/weather/widget-and-stack.md`](../../docs/weather/widget-and-stack.md).
-- The cache is in memory only; persistence for the widget is a follow-up.
+- The cache is in memory only; there is no on-device persistence yet.
 - iOS is untested. The target exercised here is Android.
 
 Docs: [`docs/weather/`](../../docs/weather/)

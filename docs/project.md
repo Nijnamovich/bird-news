@@ -13,8 +13,8 @@ Two kinds of content live here:
   weather design notes under `docs/weather/`.
 - **Application source** — a minimal, **read-only weather app for Necochea**
   under `apps/weather-radar/` (see "Slices"): current conditions, a 24-hour
-  forecast and a 7-day forecast, with a future Android home-screen widget. The
-  earlier WetterOnline "Weather & Radar" visual clone — radar map, layer panel,
+  forecast and a 7-day forecast. The earlier WetterOnline "Weather & Radar"
+  visual clone — radar map, layer panel,
   legend, webcam sheet, timeline, synthetic radar field and the WetterOnline
   config service — was removed in the 2026-11-12 reduction.
 
@@ -35,8 +35,7 @@ in the template, but this demo is only exercised for Android).
 The current stack is unchanged by the 2026-11-12 reduction. Newer upstream
 versions exist — ng-native **0.22.2** (2026-11-06) and Expo **SDK 58** /
 React Native 0.88 — but upgrading is deliberately a separate pass; see
-`docs/weather/widget-and-stack.md` for the version comparison, the Android
-widget options, and the JDK 27 build blocker.
+`docs/weather/stack-and-upgrade.md` for the version comparison.
 
 > ⚠️ **Never run commands from the repository root** — there is no root
 > `package.json`. Run every app command from the
@@ -223,8 +222,8 @@ parameters.
 
 - There are **zero live endpoints by default**: with `PULL_BASE_URL` empty the
   app renders a bundled `fixture` snapshot and makes no network request. The
-  last-known-good copy is **in memory, for the session only** — persistence is
-  the widget follow-up.
+  last-known-good copy is **in memory, for the session only** — there is no
+  on-device persistence in this version.
 - The optional `pc-pull` provider performs one unauthenticated, zero-parameter
   `GET` of `https://<stable-host>/weather/necochea/v1/latest.json` (a static
   JSON snapshot), on **cold start only** in this version; resume and
@@ -247,8 +246,8 @@ Full inventory, each justified: `apps/weather-radar/ENDPOINTS.md`.
 - `docs/api/openapi.weather-snapshot.yaml` — canonical `WeatherSnapshot`
   contract, v1.0.0 (OpenAPI 3.1).
 - `docs/weather/` — how the data gets updated (`data-sources.md`), the
-  keep/rewrite/delete inventory (`prune-inventory.md`), and stack/widget
-  notes (`widget-and-stack.md`).
+  keep/rewrite/delete inventory (`prune-inventory.md`), and the stack/upgrade
+  note (`stack-and-upgrade.md`).
 - `docs/security-audits/` — the original static audit deliverable.
 
 ## Metadata
@@ -289,13 +288,14 @@ Full inventory, each justified: `apps/weather-radar/ENDPOINTS.md`.
   `phone-scrape` stays unimplemented. The app ships with `PULL_BASE_URL` empty,
   so it renders the fixture and makes zero requests. On-device boot of the
   reduced screen is **pending** (`expo export` proves bundling only).
-  `docs/security-audits/**` remains the repository's original deliverable,
-  pending human approval — not deleted.
+  `docs/security-audits/**` remains the repository's original deliverable:
+  a one-page static-audit summary, with the full evidence preserved in git
+  history at commit `ce4ca74`.
 
 ## Slices
 | Slice | Description | Entry points | Primary agents |
 | --- | --- | --- | --- |
-| weather-radar-app | Personal read-only Necochea weather app (current/24h/7d) + future Android widget; provider-agnostic snapshot contract (`docs/api/`) with design notes in `docs/weather/` | `apps/weather-radar/` | coder (angular), reviewer |
+| weather-radar-app | Personal read-only Necochea weather app (current/24h/7d); provider-agnostic snapshot contract (`docs/api/`) with design notes in `docs/weather/` | `apps/weather-radar/` | coder (angular), reviewer |
 
 ## Notes
 - Analysis artifacts (APK copies, tool installs) live outside this repo, in
