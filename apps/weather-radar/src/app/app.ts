@@ -44,22 +44,26 @@ const ACCENT_COLOR = '#ffbe00';
 const ERROR_COLOR = '#e00000';
 
 /**
- * Production pull origin. Set it to a NAMED Cloudflare tunnel with a stable
- * hostname, e.g. `'https://weather.<your-domain>'`; a quick tunnel is rejected
- * because its rotating hostname breaks the saved value.
+ * Production pull origin: the GitHub Pages deployment of the scheduled producer
+ * workflow (`.github/workflows/weather-data.yml`). The snapshot it publishes is
+ * `https://nijnamovich.github.io/bird-news/weather/necochea/v1/latest.json`.
  *
- * Empty (the shipped default) → bundled fixture and zero network requests.
- * Only `https://` or the empty string is accepted here.
+ * Empty string → bundled fixture and zero network requests. Only `https://` or
+ * the empty string is accepted here.
+ *
+ * This is a project site, so the URL carries a path prefix (`/bird-news`): the
+ * path segment must survive composition with the snapshot path.
  */
-const PULL_BASE_URL = '';
+const PULL_BASE_URL = 'https://nijnamovich.github.io/bird-news';
 
 /**
  * DEV ONLY: plain-HTTP producer on this machine, served by
  * `npm run weather:serve` and reached with `adb reverse tcp:8080 tcp:8080`
  * (or the LAN IP). Empty by default.
  *
- * This is the seam that later becomes the named-tunnel URL in
- * `PULL_BASE_URL`; insecure HTTP is reachable ONLY from this constant.
+ * Because the shipped `PULL_BASE_URL` is now non-empty, local dev (Expo Go +
+ * `npm run weather:serve` + `adb reverse`) requires temporarily emptying
+ * `PULL_BASE_URL`: setting both is a startup error.
  */
 const DEV_HTTP_BASE_URL = '';
 

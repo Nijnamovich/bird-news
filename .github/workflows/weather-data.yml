@@ -1,0 +1,61 @@
+name: Weather data → GitHub Pages
+
+# Best-effort cadence: GitHub's scheduler can delay or drop cron runs under load,
+# so treat 30 minutes as a target, not a guarantee. The app tolerates a late
+# snapshot (it labels the data stale), so a skipped run only widens the gap.
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: weather-data-pages
+  cancel-in-progress: false
+
+jobs:
+  produce-and-deploy:
+    # A dispatch from a feature branch would replace the live Pages artifact with
+    # that branch's output; allow it only from the default branch or on the cron.
+    if: github.event_name == 'schedule' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: apps/weather-radar/package-lock.json
+
+      - name: Install app dependencies
+        working-directory: apps/weather-radar
+        run: npm ci
+
+      - name: Produce the Necochea snapshot
+        working-directory: apps/weather-radar
+        run: npm run weather:produce
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v6
+
+      # The artifact root is `weather-data/` (not `weather-data/weather/...`)
+      # because the app requests `/weather/necochea/v1/latest.json` relative to
+      # the project-site prefix; uploading the parent keeps that path shape.
+      - name: Upload the snapshot directory
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: apps/weather-radar/weather-data
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
