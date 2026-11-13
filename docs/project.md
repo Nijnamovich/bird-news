@@ -27,15 +27,13 @@ Two stacks coexist; **there is NO build at the repository root**.
 
 **Documentation** — Markdown + copied evidence files only. No build.
 
-**App** (`apps/weather-radar/`) — **Angular Native** (ng-native 0.9.0) on
-**Expo SDK 57** (57.0.x) / **React Native 0.86** (New Architecture) /
-**Angular 22**. Target platform exercised: **Android** (iOS assets exist
-in the template, but this demo is only exercised for Android).
+**App** (`apps/weather-radar/`) — **Angular Native** (ng-native 0.22.2) on
+**Expo SDK 58** (`expo ~58.0.25`) / **React Native 0.88.1** (New Architecture) /
+**Angular 22** / **React 19.3.0**. Target platform exercised: **Android** (iOS
+assets exist in the template, but this demo is only exercised for Android).
 
-The current stack is unchanged by the 2026-11-12 reduction. Newer upstream
-versions exist — ng-native **0.22.2** (2026-11-06) and Expo **SDK 58** /
-React Native 0.88 — but upgrading is deliberately a separate pass; see
-`docs/weather/stack-and-upgrade.md` for the version comparison.
+The stack was upgraded from ng-native 0.9.0 / SDK 57 / RN 0.86 on 2026-11-13;
+`docs/weather/stack-and-upgrade.md` records the lineage and the verification.
 
 > ⚠️ **Never run commands from the repository root** — there is no root
 > `package.json`. Run every app command from the
@@ -54,7 +52,7 @@ Canonical app commands (all run from `apps/weather-radar/`):
 
 Node requirement: **≥ 22.18** (the ng-native documented floor; its own dev
 environment uses Node 24). Toolchain present on the authoring host: Node
-v26.11.1, OpenJDK 27.
+v26.13.1, OpenJDK 27.
 
 ### Android toolchain on this host (Option A, user-local, no sudo)
 
@@ -215,6 +213,26 @@ The `webcam-sheet.component.ts` file that produced the old `NG0318
 [style.transform]` dev-startup warning was deleted in the same reduction, so
 that warning cannot occur any more.
 
+### Stack upgrade (2026-11-13) — 0.22.2 / SDK 58 booted
+
+All five `@ng-native/*` packages moved to **0.22.2** in lockstep, `expo` to
+`~58.0.25`, `expo-system-ui` to `~58.0.7`, `react-native` to `0.88.1` and
+`react` to `19.3.0` (the version Expo SDK 58 pins, checked with
+`npx expo install --check`); `package-lock.json` was regenerated. One source
+change was needed: React Native 0.88 types `AppRegistry.registerRunnable`'s
+runnable as `AppParameters` with an opaque `RootTag`, so `src/main.ts` no longer
+annotates `rootTag` by hand.
+
+Verification (2026-11-13): `npm test` **110/110**, `npm run typecheck` clean,
+`npx expo export --platform android` bundles (1129 modules → 4 MB Hermes), and a
+cold start on the `pixel` AVD (API 36) with the **Expo Go 58.0.5** client
+painted the reduced screen. With `DEV_HTTP_BASE_URL` temporarily pointing at the
+local producer, the same build rendered the live Open-Meteo document
+("Actualizado", 15 °C, 89 % humidity, 24 hour cards, 7 day rows); the constant
+was restored to `''` afterwards. The 57.0.9 client was replaced on the emulator
+with 58.0.5 (SHA-256 `d979cf81c56c5432c5aa69adc9497521ee72d1f87e92eee33bc949167a40f1a6`)
+because Expo Go must match the project's SDK.
+
 ### Read-only network contract (app)
 The app is **read-only by construction**: HTTP **GET** only; no request
 bodies, cookies, `Authorization`, device identifiers, or user-data query
@@ -291,6 +309,18 @@ Full inventory, each justified: `apps/weather-radar/ENDPOINTS.md`.
   `docs/security-audits/**` remains the repository's original deliverable:
   a one-page static-audit summary, with the full evidence preserved in git
   history at commit `ce4ca74`.
+- 2026-11-13: **pc-pull made usable without a tunnel and the stack upgraded.**
+  Added a zero-dependency producer (`scripts/weather-produce.mjs`, Open-Meteo,
+  keyless, HTTP 200 verified; AccuWeather HTML stayed 403 so its adapter is a
+  disabled seam), a contract-faithful static server with ETag/304, the
+  DEV-only `DEV_HTTP_BASE_URL` constant (empty by default; `PULL_BASE_URL`
+  remains `''` or `https://` only) and
+  `docs/weather/pc-pull-runbook.md` (produce → serve → `adb reverse` → live
+  badge → named Cloudflare tunnel later). Live data verified on the emulator.
+  Upgraded to `@ng-native/* 0.22.2` + Expo SDK 58 / RN 0.88.1 / React 19.3.0
+  and removed the last Android-widget references: the widget is dropped, and
+  the audit directory is now one ~50-line summary with its evidence in git
+  history.
 
 ## Slices
 | Slice | Description | Entry points | Primary agents |
@@ -305,10 +335,12 @@ Full inventory, each justified: `apps/weather-radar/ENDPOINTS.md`.
 - Scope discipline: all audits in this repo are DEFENSIVE and STATIC. No
   cracking, patching, circumvention, redistribution, or use of paid
   features. Nothing from the audited APK is executed.
-- **ng-native is an alpha (0.9.0) community project**, not endorsed by
-  Google/Angular/Expo; the demo is experimental. The app transitively
-  carries 30 npm-audit findings from the bleeding-edge template — acceptable
-  for a local read-only demo; revisit (`npm audit`) before wider use. The
+- **ng-native is an alpha (0.22.2) community project**, not endorsed by
+  Google/Angular/Expo; the demo is experimental. After the 2026-11-13 upgrade
+  `npm audit` reports **3 moderate** findings (`minimatch` via
+  `@expo/fingerprint` via `expo`), down from 30 on the 0.9.0 template —
+  acceptable for a local read-only demo; revisit (`npm audit`) before wider use.
+  The
   scaffold originally shipped template `AGENTS.md` / `CLAUDE.md` / `.claude/`
   as developer guidance; they were **removed by the human** to keep the
   package clean.

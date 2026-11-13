@@ -115,7 +115,8 @@ adb shell uiautomator dump /sdcard/ui.xml && adb shell cat /sdcard/ui.xml
 **Verified on the emulator (2026-11-13).** With `DEV_HTTP_BASE_URL` temporarily
 set to `http://localhost:8080`, the `pixel` AVD (API 36, SwiftShader) booted the
 app through `npm run android` and `adb shell uiautomator dump` read back the
-live document:
+live document (re-verified after the stack upgrade, on the Expo Go **58.0.5**
+client that SDK 58 requires):
 
 ```
 Necochea / Cubierto / 15° / Sensación 12° / Viento 22 km/h ENE / Humedad 89%

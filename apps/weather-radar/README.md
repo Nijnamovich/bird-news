@@ -6,8 +6,8 @@ construction: the only network call is a single parameterless `GET` for a JSON
 snapshot, and no request body, cookie, authorization header, device identifier,
 or user-data query parameter is ever sent.
 
-The app is built with **ng-native 0.9.0** (Angular 22 + Expo SDK 57 + React
-Native 0.86). It is not an Angular CLI workspace.
+The app is built with **ng-native 0.22.2** (Angular 22 + Expo SDK 58 + React
+Native 0.88). It is not an Angular CLI workspace.
 
 ## Commands
 
@@ -20,11 +20,21 @@ npm run android      # freeze-proof launcher: waits for Metro, then opens the ap
 npm test             # vitest, hermetic (Node, no emulator)
 npm run typecheck    # Angular AOT typecheck (ngc --noEmit)
 npx expo export --platform android   # bundle proof, no device needed
+
+# Real data without a tunnel (two commands, two terminals):
+npm run weather:produce   # one Open-Meteo GET -> validated, atomically written snapshot
+npm run weather:serve     # serve weather-data/ on :8080 with ETag/304
 ```
 
 `npm run android` runs `scripts/start-android.mjs` (boot-completed wait, process
 death wait, verified open + bounded retry). `npm run android:raw` keeps the
 legacy `expo start --android` flow for reference.
+
+To see live data: run the two `weather:*` commands above, `adb reverse tcp:8080
+tcp:8080`, set `DEV_HTTP_BASE_URL = 'http://localhost:8080'` in
+`src/app/app.ts` (empty by default, dev only) and start the app. Full sequence,
+cleartext caveat and the later named-tunnel steps:
+[`docs/weather/pc-pull-runbook.md`](../../docs/weather/pc-pull-runbook.md).
 
 ## Layout
 

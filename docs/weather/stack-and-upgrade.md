@@ -34,4 +34,18 @@ ng-native remains the only option that keeps the existing Angular code and
 renders native views. Switching to Ionic or NativeScript is a rewrite of the
 rendering layer; switching to Expo + React is a rewrite of the app.
 
-The stack upgrade to `@ng-native/* 0.22.2` + Expo SDK 58 / React Native 0.88 is applied in this branch; see `docs/project.md` for the verified outcome.
+## Upgrade outcome (2026-11-13)
+
+Applied: `@ng-native/* 0.22.2` (five packages, in lockstep), `expo ~58.0.25`,
+`expo-system-ui ~58.0.7`, `react-native 0.88.1`, `react 19.3.0` (the version
+Expo SDK 58 pins), lockfile regenerated. One source change was required: React
+Native 0.88 replaced the runnable's hand-written parameter type with
+`AppParameters` / opaque `RootTag`, so `src/main.ts` no longer annotates
+`rootTag`.
+
+Verified on 2026-11-13: `npm test` 110/110, `npm run typecheck` clean,
+`npx expo export --platform android` bundles (1129 modules → 4 MB Hermes), and a
+cold start on the `pixel` AVD with the Expo Go **58.0.5** client painted the
+reduced screen — and the live Open-Meteo document with the dev HTTP constant
+temporarily set. `npm audit` reports 3 moderate findings (`minimatch` via
+`@expo/fingerprint`), down from 30. See `docs/project.md` for the full record.
