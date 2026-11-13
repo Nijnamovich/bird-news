@@ -1,8 +1,9 @@
 ---
 last_updated: 2026-11-13
-status: current
+status: active
 description: One-page summary of the static security audit of a re-signed "Weather & Radar" Android APK; full evidence is preserved at commit ce4ca74.
 tags: [security-audit, android, apk, static-analysis, provenance]
+version: 1.0
 ---
 
 # Static Security Audit — "Weather & Radar" Android APK (re-signed build)
