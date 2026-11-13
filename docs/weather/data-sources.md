@@ -139,7 +139,7 @@ device-token lifecycle.
 | **Doze / battery** | Android defers background work | No background refresh exists: this version revalidates on **cold start only** (resume and pull-to-refresh are follow-ups) |
 | **Clock skew** | Device clock differs from the producer's | `CLOCK_SKEW` is a **producer-side** error code; the client never emits it. The client derives age locally and purges a cached document at 7 days of local receipt age, so a skewed producer clock cannot keep an old copy alive |
 | **Rate limit / 429** | Producer or upstream refuses | `RATE_LIMITED`, wait at least `Retry-After`, keep the current document |
-| **304 Not Modified** | The client sent `If-None-Match: "<snapshotId>"` and the producer's copy is unchanged | Keep the cached document and refresh its local receipt time; no re-render |
+| **304 Not Modified** | The client sent `If-None-Match: "<snapshotId>"` and the producer's copy is unchanged | Keep the cached document and refresh its local receipt time; no re-render. Limitation in this version: with an in-memory cache and cold-start-only refresh, the first paint always holds the fixture, so the app does not reach `304` yet — the server answers it (verified with `curl`) and it starts mattering with persistence |
 | **Redirect** | The producer answers `3xx` | Refused (`redirect: 'error'`) → transport failure; the current document stays. A canonical URL avoids this entirely |
 | **Non-HTTPS base URL** | `PULL_BASE_URL` is not `https://` | Rejected before any request is made; the fixture stays on screen |
 | **Schema MAJOR bump** | The producer starts emitting `2.0.0` | `UNSUPPORTED_SCHEMA_VERSION`; the current document stays. A MINOR/PATCH bump is accepted |
@@ -148,8 +148,10 @@ device-token lifecycle.
 
 ## 6. Refresh cadence
 
-- **Producer:** one fetch every **30 minutes**. That is 48 upstream fetches per
-  day, the ceiling stated in §7.
+- **Producer:** at most one fetch every **30 minutes** — 48 upstream fetches per
+  day, the ceiling stated in §7. The repository ships **no scheduler**: the
+  command is run by hand (`npm run weather:produce`) or from the operator's own
+  cron, and the ceiling is a rule to keep, not an automatic guarantee.
 - **App:** revalidates on **cold start only** in this version. There is no
   resume hook and no pull-to-refresh yet — both are follow-ups — and no
   background timers: Expo Go cannot run them reliably, and a timer would only

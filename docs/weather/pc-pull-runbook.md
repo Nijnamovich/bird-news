@@ -1,3 +1,10 @@
+---
+last_updated: 2026-11-13
+status: current
+description: Produce, serve and pull a live weather snapshot without a tunnel, then swap the dev HTTP URL for a named Cloudflare tunnel.
+tags: [weather, pc-pull, runbook, producer, tunnel, android]
+---
+
 # PC pull runbook — real data today, named tunnel later
 
 Status: current (2026-11-13). Scope: `apps/weather-radar/` and this document.
@@ -188,7 +195,7 @@ human's Cloudflare account and domain.
 
 ## 8. Verification checklist
 
-- [ ] `npm test` — 110 tests pass (includes the normalizer + base-URL policy).
+- [ ] `npm test` — 111 tests pass (includes the normalizer + base-URL policy).
 - [ ] `npm run typecheck` — clean.
 - [ ] `npm run weather:produce` — one summary line, file exists, validates.
 - [ ] `curl` — `200` with `Cache-Control` + `ETag`; matching `If-None-Match` → `304`.

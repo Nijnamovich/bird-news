@@ -141,9 +141,11 @@ function ifNoneMatchMatches(header, etag) {
     return false;
   }
   const value = Array.isArray(header) ? header.join(',') : header;
+  // RFC 9110 uses weak comparison for If-None-Match, so `W/"<id>"` matches the
+  // strong tag this server emits; the app only ever sends the strong form.
   return value
     .split(',')
-    .map((candidate) => candidate.trim())
+    .map((candidate) => candidate.trim().replace(/^W\//, ''))
     .some((candidate) => candidate === '*' || candidate === etag);
 }
 

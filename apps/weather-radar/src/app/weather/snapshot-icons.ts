@@ -5,12 +5,15 @@
  * glyph set (`IconName`). This module owns both hops so there is exactly one
  * mapping of each kind:
  *
+ * - `iconNameFor` maps the contract icon to the local glyph; the screen uses it.
  * - `iconCodeFor` derives the contract icon from a condition + day/night flag.
- * - `iconNameFor` maps the contract icon to the local glyph.
+ *   It has no screen consumer today (the producer already emits `iconCode`),
+ *   but it is the reference implementation of the contract's day/night rule and
+ *   is covered by tests.
  *
- * The app never needs text→condition (`mapConditionText` was dead code: there
- * is no scraper). The producer owns that mapping; the rule is documented in
- * the OpenAPI contract.
+ * The app never needs text→condition: there is no scraper. The producer owns
+ * that mapping (WMO `weather_code` → `ConditionCode`), and the table of record
+ * is the `ConditionCode` description in the OpenAPI contract.
  */
 
 import type { ConditionCode, IconCode } from './weather-snapshot.types.ts';

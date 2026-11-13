@@ -5,9 +5,9 @@
   "source": {
     "id": "fixture",
     "producer": "fixture",
-    "attribution": "Datos: AccuWeather — uso personal/educativo",
+    "attribution": "Datos de ejemplo — uso personal/educativo",
     "url": null,
-    "licenseNote": "Datos de demostración para uso personal/educativo; sin redistribución."
+    "licenseNote": "Cifras escritas a mano para el primer arranque; no son una observación real ni datos de un proveedor."
   },
   "timing": {
     "fetchedAt": "2026-11-12T15:00:00.000Z",

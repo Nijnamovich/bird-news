@@ -64,6 +64,16 @@ describe('checkedPullBaseUrl', () => {
   test('should reject whitespace when a value contains it', () => {
     expect(checkedPullBaseUrl(' https://weather.example.invalid', PRODUCTION).ok).toBe(false);
   });
+
+  test('should reject a bare scheme with no host', () => {
+    expect(checkedPullBaseUrl('https://', PRODUCTION).ok).toBe(false);
+    expect(checkedPullBaseUrl('https:///', PRODUCTION).ok).toBe(false);
+    expect(checkedPullBaseUrl('http://', DEV).ok).toBe(false);
+    expect(checkedPullBaseUrl('http://localhost:8080/', DEV)).toEqual({
+      ok: true,
+      value: 'http://localhost:8080',
+    });
+  });
 });
 
 describe('resolvePullBaseUrl', () => {

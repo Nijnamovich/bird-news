@@ -1,5 +1,5 @@
 # ---
-# last_updated: 2026-11-12
+# last_updated: 2026-11-13
 # status: current
 # description: OpenAPI 3.1 contract for the provider-agnostic WeatherSnapshot document (Necochea).
 # tags: [weather, api, openapi, contract]
@@ -121,12 +121,17 @@ paths:
         Returns the newest complete `WeatherSnapshot` for `necochea-ar`.
         Stateless and unauthenticated. Supports conditional `GET`: the client
         sends `If-None-Match: "<snapshotId>"` for the document it already holds
-        and receives `304` when nothing changed.
+        and receives `304` when nothing changed. Limitation in this version: the
+        cache is in memory and the only document held at first paint is the
+        bundled fixture, so the shipped app does not actually reach `304` yet —
+        the server behaviour is exercised with `curl` and is ready for the
+        persistence / revalidation follow-ups.
 
-        The producer runs at most once every 30 minutes. In this version the
-        client revalidates on **cold start only**; revalidation on app resume and
-        pull-to-refresh are follow-ups, and there is no polling timer. An Android
-        widget is limited to a 30-minute update floor by the platform.
+        The producer must not run more often than once every 30 minutes; this
+        repository ships no scheduler, so the command is invoked by hand or by
+        the operator's own cron. In this version the client revalidates on
+        **cold start only**; revalidation on app resume and pull-to-refresh are
+        follow-ups, and there is no polling timer.
       parameters:
         - name: If-None-Match
           in: header
@@ -991,23 +996,36 @@ components:
         Producers map vendor-specific wording onto these values; `unknown` is the
         fallback rather than an invented code.
 
-        The shipped producer maps es-AR text with a **first-match-wins,
-        case-insensitive, accent-insensitive** rule list, in this order:
-        `thunderstorm` (`tormenta`, `trueno`, `rayo`); `sleet` (`aguanieve`,
-        `lluvia helada`); `snow` (`nieve`, `nevada`, `copos`); `heavy-rain`
-        (`lluvia fuerte`, `lluvia intensa`, `aguacero`, `chaparron`,
-        `precipitaciones fuertes`); `drizzle` (`llovizna`, `garua`); `rain`
-        (`lluvia`, `chubasco`); `fog` (`niebla`, `neblina`, `bruma`); `wind`
-        (`viento`, `ventoso`, `rafaga`); `partly-cloudy` (`parcialmente nublado`,
-        `parcialmente soleado`, `nubes dispersas`, `intervalos nubosos`,
-        `mayormente soleado`, `algo de nubes`); `overcast` (`cubierto`,
-        `encapotado`); `cloudy` (`nublado`, `nuboso`); `clear` (`despejado`,
-        `soleado`, `claro`); anything else → `unknown`. Order is the contract:
-        `heavy-rain` is tested before `rain`, `partly-cloudy` before `cloudy`,
-        and `sleet`/`snow` before the generic families whose text they contain.
+        The shipped producer (`apps/weather-radar/scripts/weather-normalize.mjs`)
+        normalises Open-Meteo's numeric **WMO `weather_code`**; the table is the
+        mapping of record:
 
-        This rule belongs to the producer: the app consumes `ConditionCode`
-        values and never parses vendor text.
+        | WMO code(s) | ConditionCode | IconCode |
+        | --- | --- | --- |
+        | 0, 1 | `clear` | `clear-day` / `clear-night` (from `is_day`) |
+        | 2 | `partly-cloudy` | `partly-cloudy-day` / `partly-cloudy-night` |
+        | 3 | `overcast` | `overcast` |
+        | 45, 48 | `fog` | `fog` |
+        | 51, 53, 55 | `drizzle` | `drizzle` |
+        | 56, 57 | `sleet` | `sleet` |
+        | 61, 63 | `rain` | `rain` |
+        | 65 | `heavy-rain` | `heavy-rain` |
+        | 66, 67 | `sleet` | `sleet` |
+        | 71, 73, 75, 77 | `snow` | `snow` |
+        | 80, 81 | `rain` | `rain` |
+        | 82 | `heavy-rain` | `heavy-rain` |
+        | 85, 86 | `snow` | `snow` |
+        | 95, 96, 99 | `thunderstorm` | `thunderstorm` |
+        | anything else | `unknown` | `unknown` |
+
+        The es-AR display text is derived from the same code. Day/night variants
+        exist only for `clear` and `partly-cloudy`; every other family uses one
+        shared icon, and daily entries use the day variant. `wind` has no WMO
+        code today, so the shipped table never emits it.
+
+        The mapping belongs to the producer: the app consumes `ConditionCode`
+        values and never parses vendor text. A future AccuWeather producer must
+        document its own table here before it is enabled.
       enum:
         - clear
         - partly-cloudy

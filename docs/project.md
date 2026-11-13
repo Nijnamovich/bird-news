@@ -215,7 +215,7 @@ that warning cannot occur any more.
 
 ### Stack upgrade (2026-11-13) — 0.22.2 / SDK 58 booted
 
-All five `@ng-native/*` packages moved to **0.22.2** in lockstep, `expo` to
+All six `@ng-native/*` packages (five runtime plus `@ng-native/testing`) moved to **0.22.2** in lockstep, `expo` to
 `~58.0.25`, `expo-system-ui` to `~58.0.7`, `react-native` to `0.88.1` and
 `react` to `19.3.0` (the version Expo SDK 58 pins, checked with
 `npx expo install --check`); `package-lock.json` was regenerated. One source
@@ -223,7 +223,7 @@ change was needed: React Native 0.88 types `AppRegistry.registerRunnable`'s
 runnable as `AppParameters` with an opaque `RootTag`, so `src/main.ts` no longer
 annotates `rootTag` by hand.
 
-Verification (2026-11-13): `npm test` **110/110**, `npm run typecheck` clean,
+Verification (2026-11-13): `npm test` **111/111**, `npm run typecheck` clean,
 `npx expo export --platform android` bundles (1129 modules → 4 MB Hermes), and a
 cold start on the `pixel` AVD (API 36) with the **Expo Go 58.0.5** client
 painted the reduced screen. With `DEV_HTTP_BASE_URL` temporarily pointing at the
@@ -245,10 +245,11 @@ parameters.
 - The optional `pc-pull` provider performs one unauthenticated, zero-parameter
   `GET` of `https://<stable-host>/weather/necochea/v1/latest.json` (a static
   JSON snapshot), on **cold start only** in this version; resume and
-  pull-to-refresh revalidation are follow-ups. It sends
+  pull-to-refresh revalidation are follow-ups. It can send
   `If-None-Match: "<snapshotId>"` for the document it already holds and keeps
-  that document on `304`. Redirects are refused, and `PULL_BASE_URL` must be
-  `https://`.
+  that document on `304` — wired and server-verified, but not reachable in this
+  version, because the only document held at first paint is the fixture.
+  Redirects are refused, and `PULL_BASE_URL` must be `https://`.
 - `phone-scrape` is **not implemented**: a plain on-device GET to the
   AccuWeather page returned **HTTP 403** (access denied) on 2026-11-12; see
   `docs/weather/data-sources.md`.
@@ -264,8 +265,9 @@ Full inventory, each justified: `apps/weather-radar/ENDPOINTS.md`.
 - `docs/api/openapi.weather-snapshot.yaml` — canonical `WeatherSnapshot`
   contract, v1.0.0 (OpenAPI 3.1).
 - `docs/weather/` — how the data gets updated (`data-sources.md`), the
-  keep/rewrite/delete inventory (`prune-inventory.md`), and the stack/upgrade
-  note (`stack-and-upgrade.md`).
+  produce → serve → `adb reverse` → named-tunnel steps (`pc-pull-runbook.md`),
+  the keep/rewrite/delete inventory (`prune-inventory.md`), and the
+  stack/upgrade note (`stack-and-upgrade.md`).
 - `docs/security-audits/` — the original static audit deliverable.
 
 ## Metadata
@@ -318,9 +320,8 @@ Full inventory, each justified: `apps/weather-radar/ENDPOINTS.md`.
   `docs/weather/pc-pull-runbook.md` (produce → serve → `adb reverse` → live
   badge → named Cloudflare tunnel later). Live data verified on the emulator.
   Upgraded to `@ng-native/* 0.22.2` + Expo SDK 58 / RN 0.88.1 / React 19.3.0
-  and removed the last Android-widget references: the widget is dropped, and
-  the audit directory is now one ~50-line summary with its evidence in git
-  history.
+  and removed the last references to that dropped feature, and the audit
+  directory is now one ~50-line summary with its evidence in git history.
 
 ## Slices
 | Slice | Description | Entry points | Primary agents |

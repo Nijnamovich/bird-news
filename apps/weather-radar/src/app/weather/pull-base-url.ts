@@ -64,7 +64,15 @@ export function checkedPullBaseUrl(
 
   const scheme = isHttps ? 'https://' : 'http://';
   const rest = value.slice(scheme.length);
-  return { ok: true, value: rest === '' ? value : `${scheme}${rest.replace(/\/+$/, '')}` };
+  if (rest.replace(/\/+$/, '') === '') {
+    // A bare scheme has no host, so it can never resolve; reject it here rather
+    // than letting the provider build `https:///weather/...` and fail later.
+    return {
+      ok: false,
+      error: `base URL must name a host after ${scheme} (got "${value}")`,
+    };
+  }
+  return { ok: true, value: `${scheme}${rest.replace(/\/+$/, '')}` };
 }
 
 /**

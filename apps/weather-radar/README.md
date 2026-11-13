@@ -15,7 +15,7 @@ All commands run from this directory (`apps/weather-radar/`), never from the
 repository root:
 
 ```sh
-npm start            # Metro; scan the QR code with Expo Go, or press a
+npm start            # Metro; scan the QR code with Expo Go (or use npm run android)
 npm run android      # freeze-proof launcher: waits for Metro, then opens the app
 npm test             # vitest, hermetic (Node, no emulator)
 npm run typecheck    # Angular AOT typecheck (ngc --noEmit)
@@ -46,8 +46,9 @@ src/app/weather/
   weather-snapshot.types.ts     the contract, in TypeScript
   snapshot-validate.ts          dependency-free structural + cross-field validator
   snapshot-cache.ts             freshness state machine (loading/fresh/stale/expired/error)
-  snapshot-icons.ts             IconCode -> local glyph (iconCodeFor)
+  snapshot-icons.ts             IconCode -> local glyph (iconNameFor)
   snapshot-provider.ts          SnapshotProvider: fixture, HTTP pull (pc-pull)
+  pull-base-url.ts              base-URL policy (https-only prod, dev HTTP opt-in)
   format.ts                     pure display helpers (es-AR)
   fixtures/necochea.snapshot.json
 ```

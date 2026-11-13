@@ -36,14 +36,14 @@ rendering layer; switching to Expo + React is a rewrite of the app.
 
 ## Upgrade outcome (2026-11-13)
 
-Applied: `@ng-native/* 0.22.2` (five packages, in lockstep), `expo ~58.0.25`,
+Applied: `@ng-native/* 0.22.2` (six packages — five runtime plus `@ng-native/testing` — in lockstep), `expo ~58.0.25`,
 `expo-system-ui ~58.0.7`, `react-native 0.88.1`, `react 19.3.0` (the version
 Expo SDK 58 pins), lockfile regenerated. One source change was required: React
 Native 0.88 replaced the runnable's hand-written parameter type with
 `AppParameters` / opaque `RootTag`, so `src/main.ts` no longer annotates
 `rootTag`.
 
-Verified on 2026-11-13: `npm test` 110/110, `npm run typecheck` clean,
+Verified on 2026-11-13: `npm test` 111/111, `npm run typecheck` clean,
 `npx expo export --platform android` bundles (1129 modules → 4 MB Hermes), and a
 cold start on the `pixel` AVD with the Expo Go **58.0.5** client painted the
 reduced screen — and the live Open-Meteo document with the dev HTTP constant
