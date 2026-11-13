@@ -7,11 +7,21 @@ import { mount } from '@ng-native/platform';
 import { currentConditions, deviceTokens, watchConditions } from '@ng-native/device';
 import { getFabricUIManager, registerPlatformComponents } from '@ng-native/fabric';
 import { App } from './app/app.ts';
+import { APP_LIFECYCLE, SNAPSHOT_STORE } from './app/weather/app-dependencies.ts';
+import { AppStateLifecycle } from './app/weather/app-state-lifecycle.ts';
+import { createFileSnapshotStore } from './app/weather/snapshot-file-store.ts';
 
 registerPlatformComponents(Platform.OS);
 
 AppRegistry.registerRunnable('main', ({ rootTag }) => {
   const app = mount(Number(rootTag), App, getFabricUIManager(), {
+    // The native collaborators are composed here, once: App reads the file
+    // store synchronously before its first paint, and subscribes to AppState
+    // for foreground revalidation. Nothing else in the tree imports them.
+    providers: [
+      { provide: SNAPSHOT_STORE, useFactory: createFileSnapshotStore },
+      { provide: APP_LIFECYCLE, useFactory: () => new AppStateLifecycle() },
+    ],
     // Colours, as the integers the platform wants.
     processColor,
     // What `@media` resolves against. Without it every media query is false and a responsive

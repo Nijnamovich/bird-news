@@ -7,6 +7,10 @@ or user-data query parameter.
 
 ng-native 0.22.2 / Expo SDK 58 / React Native 0.88 / Angular 22. Not an Angular CLI workspace.
 
+The last pull document is kept in Expo's document directory and revalidated with
+`If-None-Match` on the next cold start (and on resume only when stale), so an offline restart
+shows the last real snapshot instead of the demo fixture.
+
 ## Commands
 
 All commands run from this directory (`apps/weather-radar/`), never the repository root:

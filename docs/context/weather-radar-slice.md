@@ -63,23 +63,30 @@ source to reconcile.
 
 ## How it works
 
-1. **Boot.** `App` constructs both providers. `paintFixtureThenRefresh()` paints the bundled
-   fixture in the same microtask turn, so a cold offline launch is never blank.
+1. **Boot.** `App` reads the persisted store synchronously in its constructor, before the first
+   change detection paints. A pull-sourced last-known-good document is therefore the first paint;
+   with an empty, corrupt or purged store, `paintFixtureThenRefresh()` paints the bundled fixture
+   in the same microtask turn, so a cold offline launch is never blank.
 2. **Optional pull.** If a base URL resolved from `PULL_BASE_URL` / `DEV_HTTP_BASE_URL` is
    non-empty, one conditional `GET` of `/weather/necochea/v1/latest.json` runs once, on cold
-   start. Redirects are refused and the request times out after 8 s.
+   start, with `If-None-Match: "<persisted snapshotId>"` when a pulled document was hydrated.
+   Redirects are refused and the request times out after 8 s.
 3. **Validate, then accept.** The response body passes `validateSnapshot` before it can replace
    the stored document. `shouldAcceptIncoming` orders documents by the producer's `fetchedAt`
    and refuses error documents; an older or duplicate document never overwrites a newer one.
 4. **Render.** `evaluateSnapshot` derives `loading | fresh | stale | expired | error` from the
    document's `expiresAt`, its `fetchedAt`, and the local receipt time (7 day local purge). A
    60 s interval only advances the age label; it does not refetch.
-5. **Fail soft.** Any transport, parse or schema failure keeps the last-known-good document in
-   memory; with no document at all, an error state renders. The fixture stays labelled
+5. **Resume.** Returning to the foreground re-runs the conditional GET **only when**
+   `freshness().shouldRevalidate` is true; a fresh document produces zero requests, and a burst
+   of `active` events collapses into the one in-flight request.
+6. **Fail soft.** Any transport, parse or schema failure keeps the last-known-good document; with
+   no document at all, an error state renders. The fixture stays labelled
    "Datos de ejemplo · sin conexión".
 
 State ownership is deliberately narrow: the screen owns the `stored` signal and the failed
-flag; the cache functions are pure and take `nowMs`; providers own only transport.
+flag; the cache functions are pure and take `nowMs`; providers own only transport; the
+`SnapshotStore` seam owns persistence (file on device, memory in tests).
 
 ## Conventions of this slice
 
@@ -87,8 +94,9 @@ flag; the cache functions are pure and take `nowMs`; providers own only transpor
 - **Two constants, one origin** — setting both `PULL_BASE_URL` and `DEV_HTTP_BASE_URL` throws at
   startup rather than silently preferring one.
 - **Validate before use** — a document is never rendered or written before the contract passes.
-- **No persistence in this version** — the cache is in memory on purpose; a cold start falls
-  back to the fixture.
+- **Persist only the last good pull** — a `source.id === 'pc-pull'` document with `status.ok`
+  true is written through `SnapshotStore`; fixtures and error documents never are. Reads are
+  re-validated and corrupt, foreign or 7-day-old files are discarded silently.
 - **Lowercase native element names are load-bearing** — an uppercase name is read as an unknown
   Angular component and commits as an empty view.
 - **Values live next to their only consumer** — the palette and spacing constants are in
@@ -116,10 +124,10 @@ flag; the cache functions are pure and take `nowMs`; providers own only transpor
 
 Documented, not hidden. Each item has an id in [weather-radar-debt](weather-radar-debt.md).
 
-- **No on-device persistence** — last-known-good dies with the process (TD-02).
-- **Cold-start-only revalidation** — no resume hook, no pull-to-refresh (TD-03).
-- **`If-None-Match` is wired but not reached in practice** — first paint holds the fixture, so
-  no pull-sourced snapshot id exists to revalidate (TD-01).
+- **Persistence and conditional revalidation are implemented** (TD-01, TD-02, TD-03 closed):
+  a cold start hydrates the last pull document, sends `If-None-Match`, and treats `304` as
+  "keep the bytes, reset the receipt"; resume revalidates only when stale. No pull-to-refresh
+  affordance exists.
 - **No scheduler** — the producer runs by hand or from the operator's cron (TD-10).
 - **LAN cleartext pull unverified** — only the `adb reverse` loopback path was measured (TD-04).
 - **iOS unverified** — declared in `app.json`, never built or run (TD-07).

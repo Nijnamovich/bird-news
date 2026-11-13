@@ -193,7 +193,7 @@ routing need the human's Cloudflare account and domain.
 
 ### 7. Verification checklist
 
-- [ ] `npm test` — 111 tests pass (includes the normalizer + base-URL policy).
+- [ ] `npm test` — 135 tests pass (includes the normalizer + base-URL policy).
 - [ ] `npm run typecheck` — clean.
 - [ ] `npm run weather:produce` — one summary line, file exists, validates.
 - [ ] `curl` — `200` with `Cache-Control` + `ETag`; matching `If-None-Match` → `304` (recipe in
@@ -206,7 +206,7 @@ What the phone shows on failure (contract semantics, briefly):
 
 | Failure | Local state / what stays on screen |
 | --- | --- |
-| Producer not running / network down | `UPSTREAM_UNAVAILABLE`; fixture or in-session last-known-good |
+| Producer not running / network down | `UPSTREAM_UNAVAILABLE`; fixture or persisted last-known-good |
 | `403` from an upstream | `FETCH_BLOCKED`; current document stays |
 | `429` | `RATE_LIMITED`; wait `Retry-After`; current document stays |
 | Any other non-`200` | `HTTP_ERROR`; current document stays |

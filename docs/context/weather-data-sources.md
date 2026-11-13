@@ -57,7 +57,8 @@ There is **no single constant that switches provider**. The screen constructs th
 provider and the pull provider; the switch is the resolved base URL:
 
 - **empty** (the shipped default) → fixture only, **zero network requests**;
-- **set to an `https://` origin** → fixture first paint, then one conditional `GET` on cold start.
+- **set to an `https://` origin** → the persisted last-known-good paints on later starts
+  (the fixture on a true first run), then one conditional `GET` on cold start.
 
 ### What we measured
 
@@ -96,7 +97,8 @@ Two honest caveats:
 ### Recommendation and decision
 
 **`pc-pull` is the production mode.** The app ships with both base-URL constants empty, so it
-renders the bundled `fixture` and makes **zero network requests** until an origin is set.
+renders the persisted last-known-good (or the bundled `fixture` on a first run) and makes
+**zero network requests** until an origin is set.
 `phone-scrape` stays unimplemented (blocked by the measured 403); `push` stays a future option.
 The decision and its rejected alternatives are recorded in
 [ADR-0002](../adrs/adr-0002-pc-pull-over-on-device-scrape.md).
@@ -108,9 +110,10 @@ Why this option wins today:
 - The phone stays **out of the anti-bot arms race**. If AccuWeather changes its markup or
   challenge, one producer on one machine adapts; the app does not ship a new APK.
 - The PC dependency is **soft, not hard**: the snapshot is a static file, the app keeps the last
-  good copy in memory for the session, and the bundled fixture covers the very first launch. A
-  phone that never reaches the PC still shows *something* and says how old it is.
-- It keeps the **offline path** intact: fixture → in-session last-known-good → stale badge. No
+  good copy on the device and revalidates it on the next launch, and the bundled fixture covers
+  the very first launch. A phone that never reaches the PC still shows *something* and says how
+  old it is.
+- It keeps the **offline path** intact: fixture → persisted last-known-good → stale badge. No
   network is a normal state, not a crash.
 
 `push` buys nothing until there is a reason to wake the phone without the user opening the app,
@@ -120,19 +123,19 @@ and it costs a push service and a device-token lifecycle.
 
 | Failure | What happens | What the phone shows |
 | --- | --- | --- |
-| **PC asleep** | Pull fails at the transport layer (`UPSTREAM_UNAVAILABLE`) | The fixture on a cold start; a document already loaded this session stays on screen with an age badge |
-| **Tunnel hostname rotation** | The saved production URL stops resolving | Transport error; the fixture or in-session last-known-good stays. Fix: a **named tunnel with a custom domain**, never a quick tunnel whose hostname changes on restart |
+| **PC asleep** | Pull fails at the transport layer (`UPSTREAM_UNAVAILABLE`) | The persisted last-known-good document, or the fixture on a true first run; an age badge keeps aging |
+| **Tunnel hostname rotation** | The saved production URL stops resolving | Transport error; the fixture or persisted last-known-good stays. Fix: a **named tunnel with a custom domain**, never a quick tunnel whose hostname changes on restart |
 | **Half-written file** | The producer is mid-write when the phone reads | Invalid JSON → `PARSE_ERROR`; JSON that fails the schema → `SCHEMA_INVALID`. The previous document stays on screen |
 | **Stale edge cache** | A CDN or proxy serves an older snapshot | Values look old; the `timing` block still tells the truth. `Cache-Control: max-age=300, must-revalidate` bounds the damage |
-| **Doze / battery** | Android defers background work | No background refresh exists: this version revalidates on **cold start only** |
+| **Doze / battery** | Android defers background work | No background refresh exists: this version revalidates on **cold start**, and on resume only when the document is stale |
 | **Clock skew** | Device clock differs from the producer's | `CLOCK_SKEW` is a **producer-side** error code; the client never emits it. The client derives age locally and purges a cached document at 7 days of local receipt age |
 | **Rate limit / 429** | Producer or upstream refuses | `RATE_LIMITED`, wait at least `Retry-After`, keep the current document |
-| **304 Not Modified** | The client sent `If-None-Match: "<snapshotId>"` and the producer's copy is unchanged | Keep the cached document and refresh its local receipt time; no re-render. Limitation: with an in-memory cache and cold-start-only refresh, the first paint always holds the fixture, so the app does not reach `304` yet — the server answers it (step 3 of the runbook has the curl recipe; no dated run is recorded) and it starts mattering with persistence (TD-01, TD-02) |
+| **304 Not Modified** | The client hydrated a persisted pull document and sent `If-None-Match: "<snapshotId>"`; the producer's copy is unchanged | Keep the cached document and reset its local receipt time; no re-render and no follow-up request. Reached since 2026-11-13: the first run after an Expo Go data wipe sent no validator and got `200`; the next cold start sent the saved id and got `304` on device (TD-01 closed) |
 | **Redirect** | The producer answers `3xx` | Refused (`redirect: 'error'`) → transport failure; the current document stays. A canonical URL avoids this entirely |
 | **Non-HTTPS base URL** | The production constant is not `https://` | Rejected before any request is made; the fixture stays on screen |
 | **Schema MAJOR bump** | The producer starts emitting `2.0.0` | `UNSUPPORTED_SCHEMA_VERSION`; the current document stays. A MINOR/PATCH bump is accepted |
 | **Schema mismatch** | A field is missing, mistyped or out of range | `SCHEMA_INVALID`; the current document stays |
-| **No network** | Every request fails | The fixture on a cold start; in-session last-known-good otherwise; explicit age |
+| **No network** | Every request fails | The persisted last-known-good if one exists; the fixture on a true first run; explicit age |
 
 ### Refresh cadence
 
@@ -140,10 +143,11 @@ and it costs a push service and a device-token lifecycle.
   repository ships **no scheduler**: the command is run by hand (`npm run weather:produce`) or
   from the operator's own cron, and the ceiling is a rule to keep, not an automatic guarantee
   (TD-10).
-- **App:** revalidates on **cold start only** in this version. There is no resume hook and no
-  pull-to-refresh yet — both are follow-ups (TD-03) — and no background timers: Expo Go cannot
-  run them reliably, and a timer would only burn battery to re-read a file that changes twice an
-  hour.
+- **App:** revalidates **once per cold start** (conditionally, with the persisted `snapshotId`)
+  and again when the app returns to the foreground **only if the document is stale**
+  (`freshness().shouldRevalidate`). A fresh document produces zero requests, and there is still
+  no fetch timer: the 60 s interval only advances the age label. Pull-to-refresh remains a
+  follow-up.
 
 ### Terms of service and the read-only contract
 
@@ -177,19 +181,22 @@ green light to attempt a scrape: the only measurement is a 403.
 
 A cold start with everything configured correctly:
 
-1. The fixture paints immediately (`Datos de ejemplo · sin conexión`).
-2. One `GET https://<host>/weather/necochea/v1/latest.json` runs, with
-   `If-None-Match` omitted because the held document is the fixture.
-3. A 200 + valid document replaces the fixture; the banner becomes `Actualizado hace …`.
-4. A 304 would keep the held document and only restart its local clock — reachable once a
-   pull-sourced document survives a restart (TD-02).
+1. On a true first run the fixture paints immediately (`Datos de ejemplo · sin conexión`);
+   later cold starts hydrate the persisted pull document before the first paint.
+2. One `GET https://<host>/weather/necochea/v1/latest.json` runs. `If-None-Match` is omitted on
+   a first run (the held document is the fixture) and sent with the persisted `snapshotId`
+   otherwise.
+3. A 200 + valid document replaces the held one; the banner becomes `Actualizado hace …`.
+4. A 304 keeps the held document and only restarts its local receipt clock; no follow-up request
+   is issued.
 
 With both constants empty (the committed state), step 2 never happens and no socket is opened.
 
 ## Common mistakes
 
 - **Setting a quick tunnel** (`trycloudflare.com`) as the production origin: its hostname rotates
-  on restart, the saved URL breaks, and the app silently falls back to the fixture.
+  on restart, the saved URL breaks, and the app keeps the persisted last-known-good (or the
+  fixture on a first run).
 - **Assuming the phone scrape is merely untested** — it is measured-blocked (403) and the page is
   a JS SPA; a 200 would still not make a regex parser viable.
 - **Treating the fixture as a network failure**: it is bundled data, labelled as a sample, and

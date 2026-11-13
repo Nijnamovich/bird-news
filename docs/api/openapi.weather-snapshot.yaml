@@ -121,17 +121,16 @@ paths:
         Returns the newest complete `WeatherSnapshot` for `necochea-ar`.
         Stateless and unauthenticated. Supports conditional `GET`: the client
         sends `If-None-Match: "<snapshotId>"` for the document it already holds
-        and receives `304` when nothing changed. Limitation in this version: the
-        cache is in memory and the only document held at first paint is the
-        bundled fixture, so the shipped app does not actually reach `304` yet —
-        the server behaviour is exercised with `curl` and is ready for the
-        persistence / revalidation follow-ups.
+        and receives `304` when nothing changed. The client persists the last
+        pull-sourced success on the device, paints it before the first frame of
+        a later cold start, and revalidates it with that `snapshotId`; a `304`
+        keeps the document and only resets its local receipt time.
 
         The producer must not run more often than once every 30 minutes; this
         repository ships no scheduler, so the command is invoked by hand or by
-        the operator's own cron. In this version the client revalidates on
-        **cold start only**; revalidation on app resume and pull-to-refresh are
-        follow-ups, and there is no polling timer.
+        the operator's own cron. The client revalidates once per cold start and
+        on a return to the foreground only when the held document is stale.
+        Pull-to-refresh remains a follow-up, and there is no polling timer.
       parameters:
         - name: If-None-Match
           in: header
