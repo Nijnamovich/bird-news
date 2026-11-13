@@ -175,9 +175,9 @@ paths:
                     source:
                       id: pc-pull
                       producer: pc
-                      attribution: 'Weather data by AccuWeather (accuweather.com), Necochea forecast.'
-                      url: 'https://www.accuweather.com/es/ar/necochea/2924/weather-forecast/2924'
-                      licenseNote: 'Personal, educational, read-only use. No redistribution.'
+                      attribution: 'Datos meteorológicos por Open-Meteo (open-meteo.com) — CC BY 4.0'
+                      url: 'https://open-meteo.com/'
+                      licenseNote: 'Uso personal/educativo/read-only, sin redistribución. Open-Meteo exige atribución (CC BY 4.0) y no admite uso comercial.'
                     timing:
                       fetchedAt: '2026-11-12T18:00:00Z'
                       observedAt: '2026-11-12T17:45:00Z'

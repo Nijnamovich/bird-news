@@ -97,11 +97,15 @@ future option.
 
 ```ts
 // src/app/app.ts — the only switch
-const PULL_BASE_URL = '';                          // fixture only, no network
-// const PULL_BASE_URL = 'https://<stable-host>';  // one conditional GET on cold start
+const PULL_BASE_URL = '';        // production: '' or https://<named-tunnel> only
+const DEV_HTTP_BASE_URL = '';    // DEV: 'http://localhost:8080' (adb reverse)
 ```
 
-Setting it makes the screen paint the fixture first, then issue one conditional
+The implemented producer source is **Open-Meteo** (keyless, HTTP 200 verified
+2026-11-13, attribution CC BY 4.0); the AccuWeather adapter is present but
+disabled. `docs/weather/pc-pull-runbook.md` has the commands and the trade-off.
+
+Setting the active constant makes the screen paint the fixture first, then issue one conditional
 `GET` of `/weather/necochea/v1/latest.json` on cold start. It sends
 `If-None-Match: "<snapshotId>"` when it already holds a document; `304` keeps
 that document and only refreshes its local receipt time.
@@ -167,16 +171,20 @@ This is a **personal, educational, read-only** consumer.
   (`*.lambda-url.eu-central-1.on.aws/geovis`, `*.apm.*.cloud.es.io`,
   `tiles.*/analytics`) are never contacted.
 
-## 8. Open question for the human
+## 8. Decision (2026-11-13)
 
-Pick one, explicitly:
+**`pc-pull` is the mode; there is no tunnel yet.** Until a named tunnel exists
+the app uses the DEV-only plain-HTTP path, so real data is available today:
 
-1. **Approve `pc-pull` as the default and supply the stable URL** (a named
-   tunnel with a custom domain). That unblocks `PULL_BASE_URL` and the producer
-   schedule.
-2. **First run a phone-on-mobile-data scrape spike** — one manual `GET` from the
-   actual phone, no code, to check whether the 403 is network-specific. If it
-   succeeds, the `phone-scrape` provider becomes worth a prototype; if it fails,
-   the decision is settled.
+- `npm run weather:produce` then `npm run weather:serve` on this machine
+  (Open-Meteo, keyless), reached from the phone through
+  `adb reverse tcp:8080 tcp:8080` → `http://localhost:8080`;
+- `DEV_HTTP_BASE_URL` is a **separate, empty-by-default** constant carrying that
+  URL. `PULL_BASE_URL` stays `''` or `https://` only, and setting both is an
+  error, so a dev value can never masquerade as production;
+- the upgrade seam is one edit: once the named Cloudflare tunnel answers, put
+  `https://weather.<your-domain>` in `PULL_BASE_URL` and empty the dev constant.
 
-Until one is chosen, the app ships with `fixture` and behaves offline-correct.
+Commands, the Android cleartext caveat and the named-tunnel steps live in
+`docs/weather/pc-pull-runbook.md`. The phone-on-mobile-data scrape spike stays
+an optional experiment; it is not on the critical path.

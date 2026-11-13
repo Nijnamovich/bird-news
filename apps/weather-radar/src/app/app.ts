@@ -23,6 +23,7 @@ import {
   formatWind,
   freshnessLabel,
 } from './weather/format.ts';
+import { resolvePullBaseUrl } from './weather/pull-base-url.ts';
 import type {
   AlertSeverity,
   Cardinal,
@@ -40,22 +41,33 @@ const ACCENT_COLOR = '#ffbe00';
 const ERROR_COLOR = '#e00000';
 
 /**
- * Set your tunnel URL here, e.g. `'https://abc123.ngrok-free.app'`.
- * Leave it empty to stay on the bundled fixture and make no network attempt.
- * Only `https://` (or the empty string) is accepted: this app never sends a
- * request in the clear.
+ * Production pull origin. Set it to a NAMED Cloudflare tunnel with a stable
+ * hostname, e.g. `'https://weather.<your-domain>'`; a quick tunnel is rejected
+ * because its rotating hostname breaks the saved value.
+ *
+ * Empty (the shipped default) → bundled fixture and zero network requests.
+ * Only `https://` or the empty string is accepted here.
  */
-function checkedPullBaseUrl(value: string): string {
-  if (value !== '' && !value.startsWith('https://')) {
-    throw new Error(`PULL_BASE_URL must be empty or start with https:// (got "${value}")`);
-  }
-  if (value.includes('?') || value.includes('#')) {
-    throw new Error(`PULL_BASE_URL must not contain a query or fragment (got "${value}")`);
-  }
-  return value;
-}
+const PULL_BASE_URL = '';
 
-const PULL_BASE_URL = checkedPullBaseUrl('');
+/**
+ * DEV ONLY: plain-HTTP producer on this machine, served by
+ * `npm run weather:serve` and reached with `adb reverse tcp:8080 tcp:8080`
+ * (or the LAN IP). Empty by default.
+ *
+ * This is the seam that later becomes the named-tunnel URL in
+ * `PULL_BASE_URL`; insecure HTTP is reachable ONLY from this constant.
+ */
+const DEV_HTTP_BASE_URL = '';
+
+const resolvedPullBaseUrl = resolvePullBaseUrl({
+  production: PULL_BASE_URL,
+  dev: DEV_HTTP_BASE_URL,
+});
+if (!resolvedPullBaseUrl.ok) {
+  throw new Error(resolvedPullBaseUrl.error);
+}
+const ACTIVE_PULL_BASE_URL = resolvedPullBaseUrl.value;
 
 /**
  * The only screen.
@@ -69,9 +81,9 @@ const PULL_BASE_URL = checkedPullBaseUrl('');
  * the last-known-good stays on screen; there is no error toast when data
  * exists.
  *
- * Cache is in-memory on purpose. Persistence and shared storage are the
- * widget follow-up; adding AsyncStorage here would expand the read-only
- * surface for no user-visible gain.
+ * Cache is in-memory on purpose. Persistence is not implemented in this
+ * version: the last-known-good document lives for the session only, so a cold
+ * start always falls back to the bundled fixture.
  *
  * Element names are lowercase, and that is load-bearing: an uppercase name is
  * read as an unknown Angular component and commits as an empty view.
@@ -419,7 +431,11 @@ export class App {
   private readonly destroyRef = inject(DestroyRef);
   private readonly colorScheme = inject(ColorScheme);
   private readonly fixture = new FixtureSnapshotProvider();
-  private readonly pull = new HttpPullSnapshotProvider({ baseUrl: PULL_BASE_URL });
+  private readonly pull = new HttpPullSnapshotProvider({
+    baseUrl: ACTIVE_PULL_BASE_URL,
+    // Insecure HTTP is reachable ONLY from DEV_HTTP_BASE_URL above.
+    allowInsecureHttp: ACTIVE_PULL_BASE_URL.startsWith('http://'),
+  });
 
   private readonly nowMs = signal(Date.now());
   private readonly stored = signal<StoredSnapshot | null>(null);
@@ -581,7 +597,7 @@ export class App {
   }
 
   private async refresh(): Promise<void> {
-    if (PULL_BASE_URL.length === 0) {
+    if (ACTIVE_PULL_BASE_URL.length === 0) {
       return;
     }
 

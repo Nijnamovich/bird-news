@@ -141,4 +141,38 @@ describe('HttpPullSnapshotProvider', () => {
         }),
     ).toThrow(/query or fragment/);
   });
+
+  test('should reject a plain-http base URL when allowInsecureHttp is absent', () => {
+    expect(
+      () =>
+        new HttpPullSnapshotProvider({
+          baseUrl: 'http://localhost:8080',
+          fetchImpl: fakeFetch(() => Response.json(fixture)).fetchImpl,
+        }),
+    ).toThrow(/https:\/\//);
+  });
+
+  test('should accept a plain-http base URL when allowInsecureHttp is true', async () => {
+    const { fetchImpl, calls } = fakeFetch(() => Response.json(fixture));
+    const provider = new HttpPullSnapshotProvider({
+      baseUrl: 'http://localhost:8080',
+      allowInsecureHttp: true,
+      fetchImpl,
+    });
+
+    await provider.load();
+
+    expect(calls[0].url).toBe('http://localhost:8080/weather/necochea/v1/latest.json');
+  });
+
+  test('should still reject a query when allowInsecureHttp is true', () => {
+    expect(
+      () =>
+        new HttpPullSnapshotProvider({
+          baseUrl: 'http://localhost:8080?token=1',
+          allowInsecureHttp: true,
+          fetchImpl: fakeFetch(() => Response.json(fixture)).fetchImpl,
+        }),
+    ).toThrow(/query or fragment/);
+  });
 });

@@ -32,6 +32,8 @@
     "web": "node -e \"console.error('This app targets iOS and Android: use npm start, npm run ios or npm run android. To render it in a browser, see https://ng-native.com/packages/web#beside-a-native-app'); process.exit(1)\"",
     "typecheck": "node metro.config.js && ngc -p tsconfig.json --noEmit",
     "test": "vitest run",
+    "weather:produce": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/weather-produce.mjs",
+    "weather:serve": "node scripts/weather-serve.mjs",
     "kill": "lsof -ti:8081 | xargs -r kill"
   },
   "private": true

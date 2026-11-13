@@ -43,6 +43,13 @@ export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 export interface HttpPullSnapshotProviderOptions {
   /** Tunnel or origin serving the companion producer, without a trailing slash. */
   baseUrl: string;
+  /**
+   * DEV only: permit a plain-HTTP origin (the local `npm run weather:serve`
+   * producer reached through `adb reverse` or the LAN). Defaults to `false`,
+   * which keeps the production https-only guard exactly as strict as before.
+   * Even when true, only `http://`, `https://` or `''` are accepted.
+   */
+  allowInsecureHttp?: boolean;
   /** Injectable for tests; defaults to the platform fetch. */
   fetchImpl?: FetchLike;
   /** Abort a hung request. Defaults to 8000 ms. */
@@ -92,9 +99,15 @@ export class HttpPullSnapshotProvider implements SnapshotProvider {
 
   constructor(options: HttpPullSnapshotProviderOptions) {
     const baseUrl = options.baseUrl.replace(/\/+$/, '');
-    if (baseUrl !== '' && !baseUrl.startsWith('https://')) {
+    const allowInsecureHttp = options.allowInsecureHttp === true;
+    const isAllowed =
+      baseUrl === '' ||
+      baseUrl.startsWith('https://') ||
+      (allowInsecureHttp && baseUrl.startsWith('http://'));
+    if (!isAllowed) {
       throw new Error(
-        `HttpPullSnapshotProvider: baseUrl must be empty or start with https:// (got "${options.baseUrl}")`,
+        `HttpPullSnapshotProvider: baseUrl must be empty or start with https://` +
+          `${allowInsecureHttp ? ' (or http:// for DEV)' : ''} (got "${options.baseUrl}")`,
       );
     }
     if (baseUrl.includes('?') || baseUrl.includes('#')) {
