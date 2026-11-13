@@ -68,8 +68,9 @@ failure semantics; this record carries the choice.
 ## When not to use
 
 Do not read the 403 as "scraping is merely untested" — it is measured-blocked and the page is a
-SPA. Do not use this decision to add a polling timer or a background job: the cadence and the
-cold-start-only refresh are separate constraints (TD-03, TD-10).
+SPA. Do not use this decision to add a polling timer or a background job: the cadence, the
+cold-start conditional revalidation and the stale-only resume hook are separate constraints
+(TD-03 closed, TD-10).
 
 ## Examples
 

@@ -44,7 +44,7 @@ At most `Accept: application/json` plus the conditional `If-None-Match` validato
 | Endpoint | Status | Called by the app? | Justification |
 | --- | --- | --- | --- |
 | *(none)* | — | **No** | With both base-URL constants empty (the default), the app renders the bundled fixture and makes zero network calls. |
-| `GET https://<stable-host>/weather/necochea/v1/latest.json` | optional, read-only, unauthenticated; ETag/304 supported | **Only when a base URL is set** | The single snapshot document (`WeatherSnapshot` v1.0.0). Fired on cold start only in this version. The client sends `If-None-Match: "<snapshotId>"` for a pull-sourced document it holds and keeps that document on `304`; no polling timer, no query string, redirects refused. |
+| `GET https://<stable-host>/weather/necochea/v1/latest.json` | optional, read-only, unauthenticated; ETag/304 supported | **Only when a base URL is set** | The single snapshot document (`WeatherSnapshot` v1.0.0). Fired once on cold start after hydrating the persisted document, and on a return to the foreground only when that document is stale. The client sends `If-None-Match: "<snapshotId>"` for a pulled document it holds and keeps that document on `304`; no polling timer, no query string, redirects refused. |
 | `https://www.accuweather.com/es/ar/necochea/2924/weather-forecast/2924` | **HTTP 403** on a plain GET (measured 2026-11-12: 436 B, `<TITLE>Access Denied</TITLE>`, no `__NEXT_DATA__`, no `application/ld+json`) | **No** | Producer-side source only, and currently disabled. A phone-side scrape is blocked, so `phone-scrape` is not implemented. If ever enabled from a PC it would be personal/educational, once per 30 min at most, with attribution carried in every document. |
 | `https://api.open-meteo.com/v1/forecast` | **HTTP 200**, keyless, ~10.8 kB JSON (verified 2026-11-13) | **No** — never by the app; only by `npm run weather:produce` on the PC | The implemented producer source. Attribution CC BY 4.0 is stored in every document and displayed on screen. |
 
@@ -58,9 +58,10 @@ listed in the standing contract are still never contacted.
 ### Where the single optional call lives
 
 `src/app/weather/snapshot-provider.ts` (`HttpPullSnapshotProvider.load`) makes the optional GET.
-`src/app/app.ts` triggers it once, after the bundled fixture has painted, and only swaps the
-document when `shouldAcceptIncoming` accepts it. The contract and its error semantics are in
-`docs/api/openapi.weather-snapshot.yaml`.
+`FileSnapshotStore` (composed in `src/main.ts`) hydrates the last pull document before the first
+paint; `src/app/app.ts` revalidates it with its `snapshotId` and only swaps the document when
+`shouldAcceptIncoming` accepts it. An empty or discarded store falls back to the bundled fixture.
+The contract and its error semantics are in `docs/api/openapi.weather-snapshot.yaml`.
 
 ## When to use
 
@@ -90,7 +91,8 @@ The two default states, spelled out:
 - **Listing the producer's upstream as an app endpoint.** Open-Meteo and AccuWeather are called
   by the PC script, never by the phone; the table's "Called by the app?" column is the guard.
 - **Reintroducing a polling timer** "because the endpoint supports ETag": the contract is one
-  cold-start GET, and a timer violates the 48/day ceiling.
+  conditional GET per cold start plus a stale-only foreground revalidation, and a fetch timer
+  violates the 48/day ceiling.
 - **Adding a query parameter for location or device** — the snapshot is location-fixed
   (`necochea`) and the request must stay parameter-free.
 - **Assuming HTTPS makes a LAN `http://` pull acceptable in production** — production accepts

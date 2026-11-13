@@ -144,7 +144,7 @@ bird-news/
 - "the app shows `Datos de ejemplo · sin conexión`" → `docs/context/weather-data-sources.md#the-three-strategies`
 - "`CLEARTEXT communication to <host> not permitted by network security policy`" → `docs/protocols/pc-pull-runbook.md#5-android-cleartext-caveat`
 - "`npm run android` opens Expo Go but the screen stays blank" → `docs/context/android-toolchain.md#launch-races-blank-screen`
-- "the app never sends `If-None-Match` / never receives `304`" → `docs/context/weather-radar-debt.md#open`
+- "how does a restart keep the last snapshot / reach `304`?" → `docs/context/weather-radar-slice.md#how-it-works`
 - "AccuWeather answers `HTTP 403` / `Access Denied`" → `docs/context/weather-data-sources.md#what-we-measured`
 - "`npm audit` reports 3 moderate findings" → `docs/context/weather-radar-debt.md#accepted-wont-fix`
 - "why did the repository stay on ng-native?" → `docs/adrs/adr-0001-stay-on-ng-native.md#solution`
