@@ -24,6 +24,9 @@ import {
   freshnessLabel,
 } from './weather/format.ts';
 import { resolvePullBaseUrl } from './weather/pull-base-url.ts';
+import { APP_LIFECYCLE, SNAPSHOT_PULL_PROVIDER, SNAPSHOT_STORE } from './weather/app-dependencies.ts';
+import { isPersistableSnapshot } from './weather/snapshot-persistence.ts';
+import { MemorySnapshotStore } from './weather/snapshot-store.ts';
 import type {
   AlertSeverity,
   Cardinal,
@@ -81,9 +84,11 @@ const ACTIVE_PULL_BASE_URL = resolvedPullBaseUrl.value;
  * the last-known-good stays on screen; there is no error toast when data
  * exists.
  *
- * Cache is in-memory on purpose. Persistence is not implemented in this
- * version: the last-known-good document lives for the session only, so a cold
- * start always falls back to the bundled fixture.
+ * The last-known-good pull document is persisted through the injected
+ * `SnapshotStore` (a file on device, memory in tests). Its constructor
+ * hydrates that document before the first change detection paints and
+ * revalidates it with `If-None-Match`; an empty or unreadable store falls back
+ * to the bundled fixture. The bundled demo is never persisted.
  *
  * Element names are lowercase, and that is load-bearing: an uppercase name is
  * read as an unknown Angular component and commits as an empty view.
@@ -431,17 +436,34 @@ export class App {
   private readonly destroyRef = inject(DestroyRef);
   private readonly colorScheme = inject(ColorScheme);
   private readonly fixture = new FixtureSnapshotProvider();
-  private readonly pull = new HttpPullSnapshotProvider({
-    baseUrl: ACTIVE_PULL_BASE_URL,
-    // Insecure HTTP is reachable ONLY from DEV_HTTP_BASE_URL above.
-    allowInsecureHttp: ACTIVE_PULL_BASE_URL.startsWith('http://'),
-  });
+
+  /** Host-composed persistence; the in-memory default keeps tests hermetic. */
+  private readonly snapshotStore =
+    inject(SNAPSHOT_STORE, { optional: true }) ?? new MemorySnapshotStore();
+
+  /** Host-composed pull provider; the default follows the base-URL constants. */
+  private readonly injectedPull = inject(SNAPSHOT_PULL_PROVIDER, { optional: true });
+  private readonly pull =
+    this.injectedPull ??
+    new HttpPullSnapshotProvider({
+      baseUrl: ACTIVE_PULL_BASE_URL,
+      // Insecure HTTP is reachable ONLY from DEV_HTTP_BASE_URL above.
+      allowInsecureHttp: ACTIVE_PULL_BASE_URL.startsWith('http://'),
+    });
+  /** An injected provider is a deliberate host decision, even with no base URL. */
+  private readonly pullEnabled =
+    this.injectedPull !== null || ACTIVE_PULL_BASE_URL.length > 0;
+
+  /** Host-composed foreground seam; absent in the hermetic render test. */
+  private readonly lifecycle = inject(APP_LIFECYCLE, { optional: true });
 
   private readonly nowMs = signal(Date.now());
   private readonly stored = signal<StoredSnapshot | null>(null);
   private readonly failed = signal(false);
 
   private destroyed = false;
+  private refreshing = false;
+  private unsubscribeLifecycle: (() => void) | null = null;
   private clock: ReturnType<typeof setInterval> | null = null;
 
   /**
@@ -534,18 +556,46 @@ export class App {
   constructor() {
     inject(StatusBar).set({ style: 'auto' });
 
+    // Hydrate before the first change detection paints: the constructor runs
+    // before `mount()`'s first pass, and the store answers synchronously.
+    // A wiped Expo Go data directory and a first install are the same here.
+    const hydrated = this.snapshotStore.read();
+    if (hydrated !== null) {
+      this.stored.set(hydrated);
+    }
+
     this.destroyRef.onDestroy(() => {
       this.destroyed = true;
+      this.unsubscribeLifecycle?.();
+      this.unsubscribeLifecycle = null;
       if (this.clock !== null) {
         clearInterval(this.clock);
         this.clock = null;
       }
     });
 
-    // The fixture is local, so it paints in the same microtask turn.
-    void this.paintFixtureThenRefresh();
+    if (hydrated !== null) {
+      // The persisted pull document is the first paint; revalidate it with its
+      // own snapshotId so a reachable server can answer `304`.
+      void this.refresh();
+    } else {
+      // Empty or discarded store: the bundled fixture paints first, as before.
+      void this.paintFixtureThenRefresh();
+    }
 
-    // Keeps the freshness label honest while the screen stays open.
+    // Returning to the foreground revalidates only when the document is stale;
+    // a fresh document produces zero requests. Two `active` events in a burst
+    // collapse into the one in-flight request (`refreshing`).
+    if (this.lifecycle !== null) {
+      this.unsubscribeLifecycle = this.lifecycle.onForeground(() => {
+        if (!this.destroyed && this.freshness().shouldRevalidate) {
+          void this.refresh();
+        }
+      });
+    }
+
+    // Keeps the freshness label honest while the screen stays open. This timer
+    // only advances the clock; it never fetches.
     this.clock = setInterval(() => {
       if (!this.destroyed) {
         this.nowMs.set(Date.now());
@@ -591,57 +641,76 @@ export class App {
     }
     // Do not overwrite a live document that won a race with the fixture.
     if (this.stored() === null && loaded.kind === 'snapshot') {
-      this.store(loaded.doc, Date.now());
+      this.adopt(loaded.doc, Date.now());
     }
     await this.refresh();
   }
 
   private async refresh(): Promise<void> {
-    if (ACTIVE_PULL_BASE_URL.length === 0) {
+    if (!this.pullEnabled || this.refreshing) {
       return;
     }
-
-    // Only a document that came from the pull producer can match its ETag;
-    // the bundled fixture carries a different snapshotId.
-    const known = this.stored();
-    const knownSnapshotId =
-      known !== null && known.doc.source.id !== 'fixture' ? known.doc.snapshotId : undefined;
+    this.refreshing = true;
 
     try {
-      const result = await this.pull.load(knownSnapshotId);
-      if (this.destroyed) {
-        return;
-      }
-      if (result.kind === 'not-modified') {
-        // Revalidated: the cached bytes stand, but the local clock restarts.
-        const cached = this.stored();
-        if (cached !== null) {
-          this.stored.set({ doc: cached.doc, receivedAtLocalMs: Date.now() });
+      // Only a document that came from the pull producer can match its ETag;
+      // the bundled fixture carries a different snapshotId.
+      const known = this.stored();
+      const knownSnapshotId =
+        known !== null && known.doc.source.id !== 'fixture'
+          ? known.doc.snapshotId
+          : undefined;
+
+      try {
+        const result = await this.pull.load(knownSnapshotId);
+        if (this.destroyed) {
+          return;
         }
-        this.failed.set(false);
+        if (result.kind === 'not-modified') {
+          // Revalidated: the cached bytes stand, but the local clock restarts.
+          // Re-read the signal: a store cleared mid-flight leaves nothing to keep.
+          const cached = this.stored();
+          if (cached !== null) {
+            const revalidated = { doc: cached.doc, receivedAtLocalMs: Date.now() };
+            this.stored.set(revalidated);
+            this.persist(revalidated);
+          }
+          this.failed.set(false);
+          this.nowMs.set(Date.now());
+          return;
+        }
+        const decision = shouldAcceptIncoming(this.stored(), result.doc);
+        if (decision.accept) {
+          this.adopt(result.doc, Date.now());
+        } else {
+          // Duplicate/older still proves upstream reachable: clear a stale error flag.
+          this.failed.set(false);
+        }
+      } catch {
+        if (this.destroyed) {
+          return;
+        }
+        // Keep last-known-good. A fixture is data, so no error toast is shown.
+        this.failed.set(true);
         this.nowMs.set(Date.now());
-        return;
       }
-      const decision = shouldAcceptIncoming(this.stored(), result.doc);
-      if (decision.accept) {
-        this.store(result.doc, Date.now());
-      } else {
-        // Duplicate/older still proves upstream reachable: clear a stale error flag.
-        this.failed.set(false);
-      }
-    } catch {
-      if (this.destroyed) {
-        return;
-      }
-      // Keep last-known-good. A fixture is data, so no error toast is shown.
-      this.failed.set(true);
-      this.nowMs.set(Date.now());
+    } finally {
+      this.refreshing = false;
     }
   }
 
-  private store(doc: StoredSnapshot['doc'], receivedAtLocalMs: number): void {
-    this.stored.set({ doc, receivedAtLocalMs });
+  private adopt(doc: StoredSnapshot['doc'], receivedAtLocalMs: number): void {
+    const stored = { doc, receivedAtLocalMs };
+    this.stored.set(stored);
     this.nowMs.set(Date.now());
     this.failed.set(false);
+    this.persist(stored);
+  }
+
+  /** Only pull-sourced successes survive a restart; fixtures never do. */
+  private persist(stored: StoredSnapshot): void {
+    if (isPersistableSnapshot(stored.doc)) {
+      this.snapshotStore.write(stored);
+    }
   }
 }
