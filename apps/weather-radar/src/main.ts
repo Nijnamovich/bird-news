@@ -6,7 +6,6 @@ import { AppRegistry, Image, Platform, processColor } from 'react-native';
 import { mount } from '@ng-native/platform';
 import { currentConditions, deviceTokens, watchConditions } from '@ng-native/device';
 import { getFabricUIManager, registerPlatformComponents } from '@ng-native/fabric';
-import { provideNativeHttpClient } from '@ng-native/platform/http';
 import { App } from './app/app.ts';
 
 registerPlatformComponents(Platform.OS);
@@ -23,9 +22,6 @@ AppRegistry.registerRunnable('main', ({ rootTag }: { rootTag: number | string })
     tokens: deviceTokens(),
     // Turns a `require('./x.png')` into something native can load. Without it images are blank.
     resolveAssetSource: (value) => Image.resolveAssetSource(value as never),
-    // The read-only weather screen makes one parameterless GET; this is the React Native HTTP
-    // client. `provideHttpClient()` is not used: its fetch backend can fail silently on native.
-    providers: [provideNativeHttpClient()],
   });
 
   // Re-resolves the conditions when the device rotates or the theme changes. A rotation dirties

@@ -1,214 +1,182 @@
 import { Component, computed, DestroyRef, inject, signal } from '@angular/core';
-import { Pressable, SafeAreaProvider, SafeAreaView, Text, View } from '@ng-native/components';
-import { HardwareBack, StatusBar } from '@ng-native/device';
-import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { Icon } from './icons.ts';
-import { LayerPanelComponent } from './layer-panel.component.ts';
-import { LegendOverlayComponent } from './legend-overlay.component.ts';
-import { RadarMapComponent } from './radar-map.component.ts';
-import { DEFAULT_PRODUCT, productByKey, RADAR_PRODUCTS, type ProductKey } from './radar-products.ts';
-import { RadarConfigService, type RadarConfigData } from './radar-config.service.ts';
-import { TimeControlComponent } from './time-control.component.ts';
-import { WebcamSheetComponent } from './webcam-sheet.component.ts';
+import { SafeAreaProvider, SafeAreaView, ScrollView, Text, View } from '@ng-native/components';
+import { ColorScheme, StatusBar } from '@ng-native/device';
+import { Icon, type IconName } from './icons.ts';
+import {
+  DEFAULT_CACHE_CONFIG,
+  errorState,
+  evaluateSnapshot,
+  shouldAcceptIncoming,
+  type CacheConfig,
+  type StoredSnapshot,
+} from './weather/snapshot-cache.ts';
+import { iconNameFor } from './weather/snapshot-icons.ts';
+import {
+  FixtureSnapshotProvider,
+  HttpPullSnapshotProvider,
+} from './weather/snapshot-provider.ts';
+import {
+  formatAge,
+  formatDay,
+  formatHour,
+  formatTemperature,
+  formatWind,
+  freshnessLabel,
+} from './weather/format.ts';
+import type {
+  AlertSeverity,
+  Cardinal,
+  IconCode,
+  WeatherAlert,
+} from './weather/weather-snapshot.types.ts';
 
-/** Where the one live GET is in its lifecycle. */
-type LoadStatus = 'idle' | 'loading' | 'loaded' | 'error';
-
-/** Which floating panel, if any, is open. At most one at a time. */
-type PanelKey = 'layer' | 'legend' | 'webcam' | null;
+/** Platform typeface stack; the stylesheet's colours are the CSS source of truth. */
+const FONT_FAMILY = 'Roboto, Droid Sans, sans-serif';
+/** Screen gutter and hourly-card width, in density-independent pixels. */
+const PAGE_PADDING = 16;
+const HOUR_CARD_WIDTH = 64;
+/** Alert edge colours (warnings yellow / error red). */
+const ACCENT_COLOR = '#ffbe00';
+const ERROR_COLOR = '#e00000';
 
 /**
- * The single main screen, a visual clone of the original "Weather & Radar" Android app: one
- * full-bleed radar map with a floating, corner-anchored control overlay. No header, no cards, no
- * page title.
+ * Set your tunnel URL here, e.g. `'https://abc123.ngrok-free.app'`.
+ * Leave it empty to stay on the bundled fixture and make no network attempt.
+ * Only `https://` (or the empty string) is accepted: this app never sends a
+ * request in the clear.
+ */
+function checkedPullBaseUrl(value: string): string {
+  if (value !== '' && !value.startsWith('https://')) {
+    throw new Error(`PULL_BASE_URL must be empty or start with https:// (got "${value}")`);
+  }
+  if (value.includes('?') || value.includes('#')) {
+    throw new Error(`PULL_BASE_URL must not contain a query or fragment (got "${value}")`);
+  }
+  return value;
+}
+
+const PULL_BASE_URL = checkedPullBaseUrl('');
+
+/**
+ * The only screen.
  *
- * Read-only contract (the standing rule for this whole app):
- * - The only network call is the single parameterless, unauthenticated GET in
- *   `RadarConfigService.loadConfig()`, and it fires only when the user presses "Fetch public layer
- *   config" in the layer panel. It is never fired on init.
- * - Nothing else is fetched, and no device capability that would leave the device is used: the
- *   locate control performs no location lookup, the share control performs no native share and no
- *   screenshot. Both are present for visual fidelity only.
+ * Read-only contract: one parameterless GET to the companion producer, with
+ * `Accept: application/json` only. No request body, cookies, authorization
+ * header, device identifier, or user-data query parameter.
  *
- * Labelling rule (a human decision, minimised on purpose): exactly TWO user-facing strings carry
- * the whole "this is not real" surface — the safety line rendered last in this template
- * ("Simulated data · read-only demo") and the timeline's own notice rendered by
- * `time-control` ("Not real weather — simulated forecast"). No other MOCK/FICTIONAL/DEMO wording
- * exists anywhere in the app.
+ * The bundled fixture paints immediately. A successful pull replaces it only
+ * when `shouldAcceptIncoming` says the document is new enough. On any failure
+ * the last-known-good stays on screen; there is no error toast when data
+ * exists.
  *
- * Element names are lowercase, and that is load-bearing rather than style: an uppercase name is
- * read as an unknown Angular component and commits as a plain view with nothing in it.
+ * Cache is in-memory on purpose. Persistence and shared storage are the
+ * widget follow-up; adding AsyncStorage here would expand the read-only
+ * surface for no user-visible gain.
+ *
+ * Element names are lowercase, and that is load-bearing: an uppercase name is
+ * read as an unknown Angular component and commits as an empty view.
  */
 @Component({
   selector: 'app-root',
-  imports: [
-    Pressable,
-    SafeAreaProvider,
-    SafeAreaView,
-    Text,
-    View,
-    Icon,
-    RadarMapComponent,
-    LayerPanelComponent,
-    LegendOverlayComponent,
-    TimeControlComponent,
-    WebcamSheetComponent,
-  ],
+  imports: [SafeAreaProvider, SafeAreaView, ScrollView, Text, View, Icon],
   template: `
     <safe-area-provider>
-      <safe-area-view class="screen">
-        <!--
-          The map's box comes from mapStyle rather than from a :host rule in its own stylesheet:
-          a child component's host takes its size from the [style] the parent hands it.
-        -->
-        <radar-map
-          [activeProduct]="activeProduct()"
-          [frameIndex]="frameIndex()"
-          [style]="mapStyle"
-        />
-
-        <!-- Floating control overlay: corner-anchored clusters over the map. -->
-        <view class="controls-wrapper">
-          <!-- top-left: back (fidelity only) + locate (no lookup — the read-only contract). -->
-          <view class="cluster top-left">
-            <pressable class="ctrl" accessibilityRole="button" accessibilityLabel="Back">
-              <icon [name]="'back'" [size]="20" />
-            </pressable>
-            <!--
-              Locate opens no panel and performs NO location lookup: the read-only contract forbids
-              leaving the device, so the control is here for fidelity and does nothing else.
-            -->
-            <pressable
-              class="ctrl"
-              accessibilityRole="button"
-              accessibilityLabel="Show my location"
-            >
-              <icon [name]="'locate'" [size]="20" />
-            </pressable>
-          </view>
-
-          <!-- top-centre: fullscreen glyph + share + logo wordmark. -->
-          <view class="cluster top-centre">
-            <!--
-              IconName has no fullscreen glyph, so the control draws its own: four corner brackets
-              from four small views.
-            -->
-            <pressable class="ctrl" accessibilityRole="button" accessibilityLabel="Fullscreen">
-              <view class="fs-glyph">
-                <view class="fs-corner fs-tl"></view>
-                <view class="fs-corner fs-tr"></view>
-                <view class="fs-corner fs-bl"></view>
-                <view class="fs-corner fs-br"></view>
+      <safe-area-view class="screen" [style]="screenStyle">
+        <scroll-view class="page">
+          <view class="content" [style]="pageContentStyle">
+            @if (current(); as c) {
+              <view class="header">
+                <text class="place">{{ locationName() }}</text>
+                <text class="condition">{{ c.condition.text }}</text>
+                <view class="hero">
+                  <icon [name]="heroIcon()" [size]="64" [tone]="iconTone()" />
+                  <text class="temperature">{{ temperature(c.temperature) }}</text>
+                </view>
+                <text class="feels">Sensación {{ temperature(c.feelsLike) }}</text>
+                <view class="metrics">
+                  <text class="metric">
+                    Viento {{ wind(c.wind.speed, c.wind.directionCardinal) }}
+                  </text>
+                  <text class="metric">Humedad {{ c.humidity }}%</text>
+                </view>
               </view>
-            </pressable>
-            <!--
-              Share performs NO native share and NO screenshot: it only toggles a small toast. The
-              read-only demo has nothing to share.
-            -->
-            <pressable
-              class="ctrl"
-              accessibilityRole="button"
-              accessibilityLabel="Share"
-              (press)="toggleShareNotice()"
+            } @else {
+              <view class="header">
+                <text class="place">{{ locationName() }}</text>
+                <text class="condition">{{ bannerText() }}</text>
+              </view>
+            }
+
+            <view
+              class="banner"
+              [class.banner-stale]="freshness().state === 'stale'"
+              [class.banner-expired]="freshness().state === 'expired' || freshness().state === 'error'"
             >
-              <icon [name]="'share'" [size]="20" />
-            </pressable>
-            <!-- Neutral wordmark, not the vendor's trademark: provenance honesty. -->
-            <view class="logo">
-              <icon [name]="'logo'" [size]="20" />
-              <text class="logo-text">Weather Radar</text>
+              <icon [name]="'info'" [size]="14" [tone]="iconTone()" />
+              <text class="banner-text">{{ bannerText() }}</text>
+              @if (freshness().document !== null) {
+                <text class="banner-age">· {{ age(freshness().ageSeconds) }}</text>
+              }
             </view>
+
+            @for (alert of activeAlerts(); track alert.id) {
+              <view class="alert" [style]="alertStyle(alert.severity)">
+                <icon [name]="'warnings'" [size]="20" [tone]="iconTone()" />
+                <view class="alert-copy">
+                  <text class="alert-title">{{ alert.title }}</text>
+                  <text class="alert-text">{{ alert.text }}</text>
+                </view>
+              </view>
+            }
+
+            @if (hourly().length > 0) {
+              <view class="section">
+                <text class="section-title">Próximas horas</text>
+                <scroll-view
+                  class="hours"
+                  [horizontal]="true"
+                  contentContainerClass="hours-content"
+                >
+                  @for (entry of nextHours(); track entry.time) {
+                    <view class="hour" testID="hour-card" [style]="hourStyle">
+                      <text class="hour-time">{{ hour(entry.time) }}</text>
+                      <icon [name]="iconFor(entry.iconCode)" [size]="24" [tone]="iconTone()" />
+                      <text class="hour-temp">{{ temperature(entry.temperature) }}</text>
+                      <view class="hour-precip">
+                        <icon [name]="'drop'" [size]="10" [tone]="iconTone()" />
+                        <text class="hour-precip-text">{{ entry.precipProbability }}%</text>
+                      </view>
+                    </view>
+                  }
+                </scroll-view>
+              </view>
+            }
+
+            @if (daily().length > 0) {
+              <view class="section">
+                <text class="section-title">Próximos 7 días</text>
+                <view class="days">
+                  @for (entry of daily(); track entry.date) {
+                    <view class="day" testID="day-row">
+                      <text class="day-name">{{ day(entry.date) }}</text>
+                      <icon [name]="iconFor(entry.iconCode)" [size]="22" [tone]="iconTone()" />
+                      <text class="day-precip">{{ entry.precipProbability }}%</text>
+                      <text class="day-temps">
+                        {{ temperature(entry.tempMin) }} / {{ temperature(entry.tempMax) }}
+                      </text>
+                    </view>
+                  }
+                </view>
+              </view>
+            }
+
+            @if (source(); as from) {
+              <text class="attribution">
+                {{ from.attribution }} · solo lectura · uso personal
+              </text>
+            }
           </view>
-
-          <!-- right rail: legend, layers, webcams. -->
-          <view class="cluster share-container">
-            <pressable
-              class="ctrl"
-              accessibilityRole="button"
-              accessibilityLabel="Legend"
-              [class.ctrl-active]="activePanel() === 'legend'"
-              (press)="openPanel('legend')"
-            >
-              <icon [name]="'info'" [size]="20" />
-            </pressable>
-            <pressable
-              class="ctrl"
-              accessibilityRole="button"
-              accessibilityLabel="Radar layers"
-              [class.ctrl-active]="activePanel() === 'layer'"
-              (press)="openPanel('layer')"
-            >
-              <icon [name]="activePanel() === 'layer' ? 'layers-open' : 'layers'" [size]="20" />
-            </pressable>
-            <pressable
-              class="ctrl"
-              accessibilityRole="button"
-              accessibilityLabel="Webcams"
-              [class.ctrl-active]="activePanel() === 'webcam'"
-              (press)="openPanel('webcam')"
-            >
-              <icon [name]="'webcam'" [size]="20" />
-            </pressable>
-          </view>
-
-          <!-- bottom-left: a static distance scale bar. Nothing computes zoom: there is no map engine. -->
-          <view class="cluster bottom-left">
-            <view class="distance-bar">
-              <text class="distance-text">50 km</text>
-            </view>
-          </view>
-
-          <!-- bottom-centre: the timeline, capped at 400px and centred. -->
-          <view class="cluster bottom">
-            <view class="bottom-inner">
-              <!-- The host is sized by [style], for the same reason as the map: a :host rule
-                   alone leaves the box zero-sized. -->
-              <time-control
-                [style]="{ width: '100%', maxWidth: 400 }"
-                [activeProduct]="activeProduct()"
-                [playing]="playing()"
-                [frameIndex]="frameIndex()"
-                (selectFrame)="selectFrame($event)"
-                (togglePlay)="togglePlay()"
-              />
-            </view>
-          </view>
-
-          <!-- The share toast: top-centre, dismissed on the second press. -->
-          @if (shareNotice()) {
-            <view class="share-toast-wrap">
-              <text class="share-toast">Share is not available in this read-only demo</text>
-            </view>
-          }
-        </view>
-
-        @if (activePanel() === 'layer') {
-          <layer-panel
-            [style]="mapStyle"
-            [activeProduct]="activeProduct()"
-            [available]="available()"
-            [configStatus]="status()"
-            (selectProduct)="selectProduct($event)"
-            (close)="closePanel()"
-            (fetchConfig)="load()"
-          />
-        }
-        @if (activePanel() === 'legend') {
-          <legend-overlay
-            [style]="mapStyle"
-            [activeProduct]="activeProduct()"
-            (close)="closePanel()"
-          />
-        }
-        <!-- Always in the DOM; its own open input controls visibility. -->
-        <webcam-sheet
-          [style]="mapStyle"
-          [open]="activePanel() === 'webcam'"
-          (close)="closePanel()"
-        />
-
-        <!-- The ONLY safety notice. Deliberately last, so it paints above every overlay. -->
-        <text class="safety-line">Simulated data · read-only demo</text>
+        </scroll-view>
       </safe-area-view>
     </safe-area-provider>
   `,
@@ -218,386 +186,446 @@ type PanelKey = 'layer' | 'legend' | 'webcam' | null;
     }
     .screen {
       flex: 1;
-      position: relative;
       background-color: #f2f7f9;
-      font-family: Roboto, Droid Sans, sans-serif;
     }
-    /* The overlay floats above the map and lets touches through to it, bar its own clusters.
-       The right and bottom edges are omitted on purpose: Yoga sizes an absolutely positioned box
-       from left/top plus an explicit width, and an inset-only edge set leaves it zero-sized. */
-    .controls-wrapper {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      z-index: 2;
-      pointer-events: none;
+    .page {
+      flex: 1;
     }
-    .cluster {
-      position: absolute;
-      flex-direction: row;
-      gap: 5px;
-      /* A cluster takes touches again inside the pass-through wrapper. */
-      pointer-events: auto;
+    .content {
+      gap: 14px;
+      padding-bottom: 28px;
     }
-    .top-left {
-      top: 5px;
-      left: 5px;
-      flex-direction: column;
+    .header {
+      padding: 20px;
+      gap: 4px;
+      border-radius: 14px;
+      background-color: #ffffff;
+      box-shadow: 0 1px 3px rgba(0, 39, 60, 0.12);
     }
-    .top-centre {
-      top: 5px;
-      left: 0;
-      width: 100%;
-      align-items: center;
-      justify-content: center;
+    .place {
+      font-size: 26px;
+      font-weight: 700;
+      color: #00273c;
     }
-    .share-container {
-      top: 5px;
-      right: 5px;
-      flex-direction: column;
-      /* Native resolves a right edge against an explicit width; without one the rail collapses. */
-      width: 40px;
-      align-items: flex-end;
+    .condition {
+      font-size: 15px;
+      color: #464646;
     }
-    .bottom-left {
-      bottom: 5px;
-      left: 5px;
-    }
-    .bottom {
-      bottom: 5px;
-      left: 0;
-      width: 100%;
-      align-items: center;
-      justify-content: center;
-    }
-    .bottom-inner {
-      width: 100%;
-      max-width: 400px;
-      align-items: center;
-    }
-    /* A control button: 40x40, radius 4, the vendor blue at 84%. */
-    .ctrl {
-      width: 40px;
-      height: 40px;
-      align-items: center;
-      justify-content: center;
-      border-radius: 4px;
-      background-color: rgba(16, 101, 142, 0.84);
-      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
-    }
-    .ctrl:active {
-      background-color: rgba(0, 57, 89, 0.84);
-    }
-    /* An open toggle stays darker than any control. */
-    .ctrl-active {
-      background-color: #00537f;
-    }
-
-    /* The inline fullscreen glyph: four corner brackets. */
-    .fs-glyph {
-      width: 20px;
-      height: 20px;
-    }
-    .fs-corner {
-      position: absolute;
-      width: 7px;
-      height: 7px;
-      border-color: #ffffff;
-    }
-    .fs-tl {
-      top: 1px;
-      left: 1px;
-      border-top-width: 2px;
-      border-left-width: 2px;
-    }
-    .fs-tr {
-      top: 1px;
-      right: 1px;
-      border-top-width: 2px;
-      border-right-width: 2px;
-    }
-    .fs-bl {
-      bottom: 1px;
-      left: 1px;
-      border-bottom-width: 2px;
-      border-left-width: 2px;
-    }
-    .fs-br {
-      bottom: 1px;
-      right: 1px;
-      border-bottom-width: 2px;
-      border-right-width: 2px;
-    }
-
-    .logo {
+    .hero {
       flex-direction: row;
       align-items: center;
-      gap: 5px;
+      gap: 8px;
+      margin-top: 8px;
     }
-    .logo-text {
-      color: #ffffff;
+    .temperature {
+      font-size: 64px;
+      font-weight: 700;
+      color: #00273c;
+    }
+    .feels {
+      font-size: 13px;
+      color: #464646;
+    }
+    .metrics {
+      flex-direction: row;
+      flex-wrap: wrap;
+      gap: 16px;
+      margin-top: 10px;
+    }
+    .metric {
+      font-size: 13px;
+      color: #10658e;
+    }
+    .banner {
+      flex-direction: row;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 12px;
+      border-radius: 8px;
+      background-color: #e6eff3;
+    }
+    .banner-text {
+      font-size: 12px;
+      font-weight: 700;
+      color: #00537f;
+    }
+    .banner-age {
+      font-size: 12px;
+      color: #00537f;
+    }
+    .banner-stale {
+      background-color: #fff3cd;
+    }
+    .banner-expired {
+      background-color: #fde8e8;
+    }
+    .alert {
+      flex-direction: row;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 12px;
+      border-left-width: 4px;
+      border-radius: 8px;
+      background-color: #fff8e1;
+    }
+    .alert-copy {
+      flex: 1;
+      gap: 2px;
+    }
+    .alert-title {
       font-size: 13px;
       font-weight: 700;
-      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+      color: #3c3c3c;
     }
-
-    /* A static scale bar; only its right corners are rounded, as in the original. */
-    .distance-bar {
-      width: 72px;
-      height: 22px;
+    .alert-text {
+      font-size: 12px;
+      color: #3c3c3c;
+    }
+    .section {
+      gap: 8px;
+    }
+    .section-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: #00273c;
+    }
+    .hours {
+      height: 124px;
+    }
+    .hours-content {
+      flex-direction: row;
+      align-items: center;
+      gap: 8px;
+      padding: 0 2px;
+    }
+    .hour {
+      height: 112px;
       align-items: center;
       justify-content: center;
-      border-radius: 0 4px 4px 0;
-      background-color: rgba(255, 255, 255, 0.75);
-      border: 1px solid rgba(16, 101, 142, 0.6);
+      gap: 6px;
+      border-radius: 10px;
+      background-color: #ffffff;
     }
-    .distance-text {
-      color: #3c3c3c;
-      font-size: 11px;
+    .hour-time {
+      font-size: 12px;
+      color: #464646;
     }
-
-    .share-toast-wrap {
-      position: absolute;
-      top: 52px;
-      left: 0;
-      width: 100%;
+    .hour-temp {
+      font-size: 16px;
+      font-weight: 700;
+      color: #00273c;
+    }
+    .hour-precip {
+      flex-direction: row;
       align-items: center;
-      pointer-events: none;
-      z-index: 3;
+      gap: 2px;
     }
-    .share-toast {
-      padding: 6px 10px;
-      border-radius: 4px;
-      background-color: rgba(0, 39, 60, 0.92);
-      color: #ffffff;
-      font-size: 11px;
+    .hour-precip-text {
+      font-size: 10px;
+      color: #10658e;
     }
-
-    /* The safety line: the one labelling string this screen owns.
-       Sized from the left edge rather than the right, for the same Yoga reason as the wrapper. */
-    .safety-line {
-      position: absolute;
-      left: 5px;
-      bottom: 5px;
+    .days {
+      border-radius: 12px;
+      overflow: hidden;
+      background-color: #ffffff;
+    }
+    .day {
+      flex-direction: row;
+      align-items: center;
+      gap: 12px;
+      min-height: 46px;
+      padding: 0 12px;
+      border-bottom-width: 1px;
+      border-bottom-color: #e6eff3;
+    }
+    .day-name {
+      width: 70px;
+      font-size: 13px;
+      font-weight: 700;
+      color: #3c3c3c;
+    }
+    .day-precip {
+      width: 42px;
+      text-align: right;
+      font-size: 12px;
+      color: #10658e;
+    }
+    .day-temps {
+      flex: 1;
+      text-align: right;
+      font-size: 13px;
+      color: #00273c;
+    }
+    .attribution {
+      margin-top: 6px;
       font-size: 11px;
       color: #a0a0a0;
-      pointer-events: none;
-      z-index: 20;
+      text-align: center;
     }
-
-    /* Dark mode is dark-blue, not black. */
     @media (prefers-color-scheme: dark) {
       .screen {
         background-color: #00273c;
       }
-      .ctrl {
-        background-color: #00273c;
-      }
-      .ctrl:active {
+      .header,
+      .hour,
+      .days {
         background-color: #003959;
       }
-      .ctrl-active {
+      .place,
+      .temperature,
+      .section-title,
+      .hour-temp,
+      .day-temps {
+        color: #f2f7f9;
+      }
+      .condition,
+      .feels,
+      .hour-time,
+      .day-name {
+        color: #c7d8e2;
+      }
+      .metric,
+      .day-precip,
+      .hour-precip-text {
+        color: #8fd3f4;
+      }
+      .banner {
         background-color: #003959;
       }
-      .logo-text {
+      .banner-text,
+      .banner-age {
         color: #f2f7f9;
       }
-      .distance-bar {
-        background-color: rgba(0, 39, 60, 0.75);
-        border-color: rgba(39, 117, 156, 0.6);
+      .banner-stale {
+        background-color: #4a3b00;
       }
-      .distance-text {
+      .banner-expired {
+        background-color: #4a0d0d;
+      }
+      .alert {
+        background-color: #3d3418;
+      }
+      .alert-title,
+      .alert-text {
         color: #f2f7f9;
       }
-      .share-toast {
-        background-color: rgba(0, 57, 89, 0.95);
-        color: #f2f7f9;
-      }
-      .safety-line {
-        color: #a0a0a0;
+      .day {
+        border-bottom-color: #0b4a6b;
       }
     }
   `,
 })
 export class App {
-  private readonly radar = inject(RadarConfigService);
-
   private readonly destroyRef = inject(DestroyRef);
+  private readonly colorScheme = inject(ColorScheme);
+  private readonly fixture = new FixtureSnapshotProvider();
+  private readonly pull = new HttpPullSnapshotProvider({ baseUrl: PULL_BASE_URL });
 
-  /** The product the map, legend and timeline all speak for. */
-  protected readonly activeProduct = signal<ProductKey>(DEFAULT_PRODUCT);
+  private readonly nowMs = signal(Date.now());
+  private readonly stored = signal<StoredSnapshot | null>(null);
+  private readonly failed = signal(false);
 
-  /** Which floating panel is open, if any. */
-  protected readonly activePanel = signal<PanelKey>(null);
-
-  /**
-   * The box a child component's host is given. A component's own `:host` rule does not reach its
-   * host element, and neither `flex: 1` nor percentage dimensions size it — the engine resolves the
-   * box only from the plain numbers handed in through [style]. 1080x2400 is the emulator's portrait
-   * extent, which is what this screen is exercised against.
-   */
-  protected readonly mapStyle = {
-    width: 1080,
-    height: 2400,
-  };
-
-  /** Whether the timeline is animating. */
-  protected readonly playing = signal<boolean>(false);
-
-  /** The timeline's current frame. */
-  protected readonly frameIndex = signal<number>(0);
-
-  /** The one live GET's lifecycle state. */
-  protected readonly status = signal<LoadStatus>('idle');
-
-  /** The share toast's visibility; it is dismissed by a second press. */
-  protected readonly shareNotice = signal<boolean>(false);
-
-  /** The loaded config, or null. Read only by `available`. */
-  private readonly config = signal<RadarConfigData | null>(null);
-
-  /** The selected product's full definition (label, legend, periods, frame count). */
-  protected readonly product = computed(() => productByKey(this.activeProduct()));
+  private destroyed = false;
+  private clock: ReturnType<typeof setInterval> | null = null;
 
   /**
-   * Product availability by key.
-   *
-   * A product with no config flag is unconditional. A flagged product is unknown until the config
-   * has loaded, and unknown means available: the app must never look broken offline. Once loaded it
-   * follows the flag exactly.
+   * The document's own freshness windows, with `DEFAULT_CACHE_CONFIG` as the
+   * fallback when nothing is stored. Purging remains a local-cache policy.
    */
-  protected readonly available = computed<ReadonlyMap<ProductKey, boolean>>(() => {
-    const status = this.status();
-    const config = this.config();
-    const map = new Map<ProductKey, boolean>();
-    for (const entry of RADAR_PRODUCTS) {
-      map.set(entry.key, flagIsAvailable(entry.configFlag, status, config));
+  private readonly cacheConfig = computed<CacheConfig>(() => {
+    const stored = this.stored();
+    if (stored === null) {
+      return DEFAULT_CACHE_CONFIG;
     }
-    return map;
+    return {
+      ttlSeconds: stored.doc.timing.ttlSeconds,
+      staleAfterSeconds: stored.doc.timing.staleAfterSeconds,
+      purgeAfterLocalSeconds: DEFAULT_CACHE_CONFIG.purgeAfterLocalSeconds,
+    };
   });
 
-  /** The animation interval's handle while playing, null when stopped. */
-  private timer: ReturnType<typeof setInterval> | null = null;
+  /** Cache evaluation, including the "no document and load failed" state. */
+  protected readonly freshness = computed(() => {
+    const stored = this.stored();
+    if (stored === null && this.failed()) {
+      return errorState();
+    }
+    return evaluateSnapshot(this.nowMs(), stored, this.cacheConfig());
+  });
 
-  /** Drops the hardware-back subscription, when there is a native side to subscribe to. */
-  private unsubscribeBack: (() => void) | null = null;
+  protected readonly snapshot = computed(() => this.freshness().document);
+  protected readonly current = computed(() => this.snapshot()?.current ?? null);
+  protected readonly hourly = computed(() => this.snapshot()?.hourly ?? []);
+  protected readonly daily = computed(() => this.snapshot()?.daily ?? []);
+  protected readonly nextHours = computed(() => this.hourly());
+  protected readonly source = computed(() => this.snapshot()?.source ?? null);
+  protected readonly locationName = computed(
+    () => this.snapshot()?.location.name ?? 'Necochea',
+  );
+  protected readonly timezone = computed(
+    () => this.snapshot()?.location.timezone ?? 'America/Argentina/Buenos_Aires',
+  );
+
+  protected readonly bannerText = computed(() => {
+    const state = this.freshness();
+    // A bundled demo document is not "stale" in the sense that matters: it is a sample.
+    if (this.snapshot()?.source.id === 'fixture') {
+      return 'Datos de ejemplo · sin conexión';
+    }
+    if (state.state === 'loading' && state.document === null) {
+      return 'Cargando…';
+    }
+    return freshnessLabel(state.badge);
+  });
+
+  /** Alerts that are severe enough to show and currently in their window. */
+  protected readonly activeAlerts = computed<readonly WeatherAlert[]>(() => {
+    const now = this.nowMs();
+    return (this.snapshot()?.alerts ?? []).filter((alert) => {
+      if (
+        alert.severity !== 'moderate' &&
+        alert.severity !== 'severe' &&
+        alert.severity !== 'extreme'
+      ) {
+        return false;
+      }
+      const startsAt = Date.parse(alert.startsAt);
+      if (!Number.isFinite(startsAt) || startsAt > now) {
+        return false;
+      }
+      if (alert.endsAt === null) {
+        return true;
+      }
+      const endsAt = Date.parse(alert.endsAt);
+      return Number.isFinite(endsAt) && now <= endsAt;
+    });
+  });
+
+  protected readonly heroIcon = computed<IconName>(() => {
+    const current = this.current();
+    return current === null ? 'cloud' : iconNameFor(current.iconCode);
+  });
+
+  protected readonly screenStyle = { fontFamily: FONT_FAMILY };
+  protected readonly pageContentStyle = { padding: PAGE_PADDING };
+  protected readonly hourStyle = { width: HOUR_CARD_WIDTH };
+
+  /** Glyph ink follows the resolved colour scheme, not the OS alone. */
+  protected readonly iconTone = computed<'light' | 'dark'>(() =>
+    this.colorScheme.current() === 'dark' ? 'light' : 'dark',
+  );
 
   constructor() {
-    // Dark status bar icons in light mode and light ones in dark mode.
     inject(StatusBar).set({ style: 'auto' });
 
-    // Android's back button: close an open panel, otherwise let the platform do its default.
-    // Off a device there is no native side; the subscription must not throw there.
-    try {
-      this.unsubscribeBack = inject(HardwareBack).handle(() => {
-        if (this.activePanel() !== null) {
-          this.activePanel.set(null);
-          return true;
-        }
-        return false;
-      });
-    } catch {
-      this.unsubscribeBack = null;
-    }
-
     this.destroyRef.onDestroy(() => {
-      // Guarantees the interval can never fire after destroy.
-      if (this.timer !== null) {
-        clearInterval(this.timer);
-        this.timer = null;
+      this.destroyed = true;
+      if (this.clock !== null) {
+        clearInterval(this.clock);
+        this.clock = null;
       }
-      this.unsubscribeBack?.();
     });
+
+    // The fixture is local, so it paints in the same microtask turn.
+    void this.paintFixtureThenRefresh();
+
+    // Keeps the freshness label honest while the screen stays open.
+    this.clock = setInterval(() => {
+      if (!this.destroyed) {
+        this.nowMs.set(Date.now());
+      }
+    }, 60_000);
   }
 
-  /** Open a panel, or close it when it is already open. */
-  protected openPanel(panel: 'layer' | 'legend' | 'webcam'): void {
-    this.activePanel.update((current) => (current === panel ? null : panel));
+  protected temperature(celsius: number): string {
+    return formatTemperature(celsius);
   }
 
-  protected closePanel(): void {
-    this.activePanel.set(null);
+  protected wind(speed: number, cardinal: Cardinal | null): string {
+    return formatWind(speed, cardinal);
   }
 
-  /** Select a product: stop playback, rewind, and close the panel that offered it. */
-  protected selectProduct(key: ProductKey): void {
-    this.activeProduct.set(key);
-    this.stopPlayback();
-    this.frameIndex.set(0);
-    this.activePanel.set(null);
+  protected age(seconds: number): string {
+    return formatAge(seconds);
   }
 
-  /** Seek to a frame, clamped to the selected product's frame count. */
-  protected selectFrame(index: number): void {
-    const frames = this.product().frames;
-    const clamped = Math.max(0, Math.min(index, frames - 1));
-    this.frameIndex.set(clamped);
+  protected hour(iso: string): string {
+    return formatHour(iso, this.timezone());
   }
 
-  /** Start animating the frames, or stop. Never autostarts. */
-  protected togglePlay(): void {
-    if (this.timer !== null) {
-      this.stopPlayback();
+  protected day(date: string): string {
+    return formatDay(date);
+  }
+
+  protected iconFor(code: IconCode): IconName {
+    return iconNameFor(code);
+  }
+
+  protected alertStyle(severity: AlertSeverity): { borderLeftColor: string } {
+    return {
+      borderLeftColor:
+        severity === 'severe' || severity === 'extreme' ? ERROR_COLOR : ACCENT_COLOR,
+    };
+  }
+
+  private async paintFixtureThenRefresh(): Promise<void> {
+    const loaded = await this.fixture.load();
+    if (this.destroyed) {
       return;
     }
-    this.playing.set(true);
-    this.timer = setInterval(() => {
-      const frames = this.product().frames;
-      this.frameIndex.update((index) => (frames > 0 ? (index + 1) % frames : 0));
-    }, 900);
-  }
-
-  /** Show or dismiss the share toast. Share does nothing native in the read-only demo. */
-  protected toggleShareNotice(): void {
-    this.shareNotice.update((shown) => !shown);
-  }
-
-  /**
-   * The one real GET. Fired only from the layer panel's (fetchConfig); never on init.
-   */
-  protected load(): void {
-    this.status.set('loading');
-    this.config.set(null);
-    // The one real GET. `takeUntilDestroyed` cancels it when the screen goes away, so a late
-    // response can never write a signal after teardown — parity with the play interval.
-    this.radar
-      .loadConfig()
-      .pipe(takeUntilDestroyed(this.destroyRef))
-      .subscribe({
-        next: (data) => {
-          this.config.set(data);
-          this.status.set('loaded');
-        },
-        error: () => {
-          this.config.set(null);
-          this.status.set('error');
-        },
-      });
-  }
-
-  private stopPlayback(): void {
-    if (this.timer !== null) {
-      clearInterval(this.timer);
-      this.timer = null;
+    // Do not overwrite a live document that won a race with the fixture.
+    if (this.stored() === null && loaded.kind === 'snapshot') {
+      this.store(loaded.doc, Date.now());
     }
-    this.playing.set(false);
+    await this.refresh();
   }
-}
 
-/** Whether a product's config flag permits it, given the live config's load state. */
-function flagIsAvailable(
-  flag: keyof RadarConfigData | null,
-  status: LoadStatus,
-  config: RadarConfigData | null,
-): boolean {
-  if (flag === null) {
-    return true;
+  private async refresh(): Promise<void> {
+    if (PULL_BASE_URL.length === 0) {
+      return;
+    }
+
+    // Only a document that came from the pull producer can match its ETag;
+    // the bundled fixture carries a different snapshotId.
+    const known = this.stored();
+    const knownSnapshotId =
+      known !== null && known.doc.source.id !== 'fixture' ? known.doc.snapshotId : undefined;
+
+    try {
+      const result = await this.pull.load(knownSnapshotId);
+      if (this.destroyed) {
+        return;
+      }
+      if (result.kind === 'not-modified') {
+        // Revalidated: the cached bytes stand, but the local clock restarts.
+        const cached = this.stored();
+        if (cached !== null) {
+          this.stored.set({ doc: cached.doc, receivedAtLocalMs: Date.now() });
+        }
+        this.failed.set(false);
+        this.nowMs.set(Date.now());
+        return;
+      }
+      const decision = shouldAcceptIncoming(this.stored(), result.doc);
+      if (decision.accept) {
+        this.store(result.doc, Date.now());
+      } else {
+        // Duplicate/older still proves upstream reachable: clear a stale error flag.
+        this.failed.set(false);
+      }
+    } catch {
+      if (this.destroyed) {
+        return;
+      }
+      // Keep last-known-good. A fixture is data, so no error toast is shown.
+      this.failed.set(true);
+      this.nowMs.set(Date.now());
+    }
   }
-  if (status !== 'loaded') {
-    // Unknown before the config loads: assume available so the app never looks broken offline.
-    return true;
+
+  private store(doc: StoredSnapshot['doc'], receivedAtLocalMs: number): void {
+    this.stored.set({ doc, receivedAtLocalMs });
+    this.nowMs.set(Date.now());
+    this.failed.set(false);
   }
-  return config?.[flag] === true;
 }
